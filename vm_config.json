@@ -1,0 +1,9 @@
+{
+  "os": {
+    "name": "microdroid"
+  },
+  "task": {
+    "type": "microdroid_launcher",
+    "command": "noxos_payload_stub.so"
+  }
+}
