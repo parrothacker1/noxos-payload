@@ -1,0 +1,37 @@
+// noxos-payload: Soong build file for the microdroid VM payload stub.
+//
+// Why Android.bp and not a standalone NDK/CMake project:
+// AOSP's documented build path for a Microdroid VM payload
+// (packages/modules/Virtualization/build/microdroid/README.md) is a
+// cc_library_shared built with Soong inside the AOSP source tree, e.g.:
+//
+//   cc_library_shared {
+//       name: "MyMicrodroidPayload",
+//       srcs: ["**/*.cpp"],
+//       sdk_version: "current",
+//   }
+//
+// then embedded into a hosting app via jni_libs + use_embedded_native_libs
+// in an android_app module. No official doc was found describing a
+// supported standalone NDK/CMake build path for the payload binary itself
+// (see README.md "Open questions" -- TODO verify in Phase 2).
+//
+// This module intentionally does NOT declare the android_app wrapper: the
+// hosting app is noxos-app (a separate repo), out of scope here. This repo
+// only owns the payload library and its config; wiring jni_libs / packaging
+// assets/vm_config.json into an actual APK is noxos-app's job.
+//
+// shared_libs: ["libvm_payload#current"] is not shown in the README's
+// trimmed example above, but was found referenced in an actual AOSP build
+// diff for a real payload module. Included here on that basis; TODO confirm
+// directly against a checked-out AOSP tree in Phase 2 (this file has never
+// been fed through Soong).
+
+cc_library_shared {
+    name: "noxos_payload_stub",
+    srcs: ["payload_main.cpp"],
+    shared_libs: [
+        "libvm_payload#current",
+    ],
+    sdk_version: "current",
+}
