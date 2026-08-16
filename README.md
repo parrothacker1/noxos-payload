@@ -121,7 +121,10 @@ The payload is a `cc_library_shared` compiled with Soong inside the AOSP source 
 ```bp
 cc_library_shared {
     name: "noxos_payload_stub",
-    srcs: ["payload_main.cpp"],
+    srcs: [
+        "payload_main.cpp",
+        "exif_parser.cpp",
+    ],
     shared_libs: [
         "libvm_payload#current",
     ],
@@ -141,10 +144,33 @@ The host app (`noxos-app`) bundles the compiled `.so` via `jni_libs` + `use_embe
 |------|-------|
 | Entry point (`AVmPayload_main`) | ✅ Confirmed against AOSP docs |
 | `vm_config.json` shape | ✅ Confirmed against `writeavfapp` guide |
-| EXIF parser code | ✅ Written, uncommitted, awaiting Phase 2 build |
+| EXIF parser code | ✅ Written, unit-tested, fuzz-tested |
 | Built inside real AOSP/Microdroid | ⏳ Phase 2 — needs EC2 + Cuttlefish |
 | Protected VM (hardware pKVM) | ⏳ Needs Pixel 6+ hardware |
-| Adversarial test suite (fuzz) | ⏳ Phase 7 |
+| Adversarial test suite (fuzz) | ✅ libFuzzer harness, CI-enforced |
+
+---
+
+## Testing & Fuzzing
+
+The pure parsing logic (`parse_exif` and everything it calls) lives in `exif_parser.h`/`exif_parser.cpp` with zero AOSP/Android dependencies — only `payload_main.cpp` touches vsock/`vm_payload` APIs. This split means the parser is testable with a plain `clang++`, no AOSP tree or Android SDK required:
+
+```bash
+clang++ -std=c++17 -g -fsanitize=address,undefined -o exif_test exif_parser.cpp test/exif_parser_test.cpp
+./exif_test
+```
+
+`fuzz/exif_fuzzer.cpp` is a libFuzzer harness over the same entry point:
+
+```bash
+clang++ -std=c++17 -g -O1 -fsanitize=fuzzer,address,undefined -o exif_fuzzer exif_parser.cpp fuzz/exif_fuzzer.cpp
+mkdir -p corpus && cp fuzz/seeds/* corpus/
+./exif_fuzzer corpus -max_total_time=60
+```
+
+**A real bug was found and fixed this way, not a hypothetical.** The original `tiff_len` computation trusted the JPEG APP1 segment's declared length (`seg_len`, attacker-controlled) without checking it against either a minimum (`seg_len < 8` underflows the `size_t` subtraction) or the actual buffer size (`pos + 2 + seg_len > size` — a segment can *declare* far more bytes than the file actually contains). A 12-byte crafted input (`FF D8 FF E1 00 2D 45 78 69 66 00 00`) reproducibly triggered a heap-buffer-overflow read under `-fsanitize=address` against the pre-fix parser — confirmed by extracting the old logic and running it standalone before the fix landed, not inferred. Fixed by validating `seg_len` against both bounds before trusting it; regression-tested in `test/exif_parser_test.cpp` and kept as a fuzz seed (`fuzz/seeds/regression_oob_seg_len.jpg`).
+
+CI (`.github/workflows/ci.yml`) runs the self-check test and a 60-second bounded fuzz pass (both under ASan+UBSan) on every push/PR — a fixed time budget, not exhaustive, but enough to catch regressions and was enough to independently re-find nothing new beyond the bug above across ~9M+ local executions during development.
 
 ---
 
