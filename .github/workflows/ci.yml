@@ -15,6 +15,14 @@ jobs:
         run: clang++ -std=c++17 -g -fsanitize=address,undefined -o exif_test exif_parser.cpp test/exif_parser_test.cpp
       - name: Run parser self-check
         run: ./exif_test
+      - name: Build file cheap filter self-check
+        run: clang++ -std=c++17 -g -fsanitize=address,undefined -o file_cf_test file_cheap_filter.cpp test/file_cheap_filter_test.cpp
+      - name: Run file cheap filter self-check
+        run: ./file_cf_test
+      - name: Build network cheap filter self-check
+        run: clang++ -std=c++17 -g -fsanitize=address,undefined -o net_cf_test network_cheap_filter.cpp test/network_cheap_filter_test.cpp
+      - name: Run network cheap filter self-check
+        run: ./net_cf_test
 
   fuzz:
     runs-on: ubuntu-latest
@@ -24,3 +32,11 @@ jobs:
         run: clang++ -std=c++17 -g -O1 -fsanitize=fuzzer,address,undefined -o exif_fuzzer exif_parser.cpp fuzz/exif_fuzzer.cpp
       - name: Run bounded fuzz pass
         run: mkdir -p corpus && cp fuzz/seeds/* corpus/ && ./exif_fuzzer corpus -max_total_time=60 -print_final_stats=1
+      - name: Build file cheap filter fuzzer
+        run: clang++ -std=c++17 -g -O1 -fsanitize=fuzzer,address,undefined -o file_cf_fuzzer file_cheap_filter.cpp fuzz/file_cheap_filter_fuzzer.cpp
+      - name: Run bounded file cheap filter fuzz pass
+        run: mkdir -p corpus_file_cf && ./file_cf_fuzzer corpus_file_cf -max_total_time=60 -print_final_stats=1
+      - name: Build network cheap filter fuzzer
+        run: clang++ -std=c++17 -g -O1 -fsanitize=fuzzer,address,undefined -o net_cf_fuzzer network_cheap_filter.cpp fuzz/network_cheap_filter_fuzzer.cpp
+      - name: Run bounded network cheap filter fuzz pass
+        run: mkdir -p corpus_net_cf && ./net_cf_fuzzer corpus_net_cf -max_total_time=60 -print_final_stats=1

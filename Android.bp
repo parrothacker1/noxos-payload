@@ -32,6 +32,8 @@ cc_library_shared {
     srcs: [
         "payload_main.cpp",
         "exif_parser.cpp",
+        "file_cheap_filter.cpp",
+        "network_cheap_filter.cpp",
     ],
     shared_libs: [
         "libvm_payload#current",

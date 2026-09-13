@@ -1,4 +1,7 @@
 #include "exif_parser.h"
+#include "file_cheap_filter.h"
+#include "json_util.h"
+#include "network_cheap_filter.h"
 
 #include <vm_payload/api.h>
 
@@ -14,7 +17,9 @@
 #include <vector>
 
 static constexpr uint32_t VSOCK_PORT = 5000;
-static constexpr size_t MAX_FILE_BYTES = 10 * 1024 * 1024;
+static constexpr size_t MAX_PAYLOAD_BYTES = 10 * 1024 * 1024;
+static constexpr uint8_t TASK_FILE_SCAN = 0;
+static constexpr uint8_t TASK_NETWORK_SAMPLE = 1;
 
 static uint32_t read_u32_be(const uint8_t* p) {
     return ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) |
@@ -56,30 +61,83 @@ static void send_response(int fd, uint8_t status, const std::string& json) {
     write_exact(fd, reinterpret_cast<const uint8_t*>(json.data()), json_len);
 }
 
-static void handle_scan(int client_fd) {
+static void handle_file_scan(int client_fd, const std::vector<uint8_t>& payload) {
+    if (payload.empty()) {
+        send_response(client_fd, noxos::kStatusMalformedInput,
+                       "{\"error\":\"file size out of range\"}");
+        return;
+    }
+
+    std::string result_json;
+    uint8_t status = (uint8_t)noxos::ParseExif(payload, result_json);
+
+    if (status == noxos::kStatusOk) {
+        noxos::CheapFilterResult cheap = noxos::CheckFileCheapFilter(payload);
+        if (cheap.flagged) {
+            result_json.pop_back();
+            result_json += ",\"cheap_filter_flagged\":true,\"cheap_filter_reason\":\"" +
+                            noxos::JsonEscape(cheap.reason) + "\"}";
+        }
+    }
+
+    send_response(client_fd, status, result_json);
+}
+
+static void handle_network_sample(int client_fd, const std::vector<uint8_t>& payload) {
+    std::vector<std::vector<uint8_t>> packets;
+    if (!noxos::DecodePacketSamples(payload, &packets)) {
+        send_response(client_fd, noxos::kStatusMalformedInput,
+                       "{\"error\":\"malformed packet sample framing\"}");
+        return;
+    }
+
+    noxos::CheapFilterResult cheap = noxos::CheckNetworkCheapFilter(packets);
+    std::string result_json = cheap.flagged
+        ? "{\"flagged\":true,\"reason\":\"" + noxos::JsonEscape(cheap.reason) + "\"}"
+        : "{\"flagged\":false}";
+
+    send_response(client_fd, noxos::kStatusOk, result_json);
+}
+
+static void handle_connection(int client_fd) {
+    uint8_t task_type;
+    if (!read_exact(client_fd, &task_type, 1)) {
+        printf("noxos-payload: failed to read task-type byte\n");
+        return;
+    }
+
     uint8_t len_buf[4];
     if (!read_exact(client_fd, len_buf, 4)) {
         printf("noxos-payload: failed to read length prefix\n");
         return;
     }
-    uint32_t file_len = read_u32_be(len_buf);
+    uint32_t payload_len = read_u32_be(len_buf);
 
-    if (file_len == 0 || file_len > MAX_FILE_BYTES) {
-        std::string err = "{\"error\":\"file size out of range\"}";
-        send_response(client_fd, noxos::kStatusMalformedInput, err);
+    if (payload_len > MAX_PAYLOAD_BYTES) {
+        send_response(client_fd, noxos::kStatusMalformedInput,
+                       "{\"error\":\"payload size out of range\"}");
         return;
     }
 
-    std::vector<uint8_t> file_bytes(file_len);
-    if (!read_exact(client_fd, file_bytes.data(), file_len)) {
-        std::string err = "{\"error\":\"incomplete file data received\"}";
-        send_response(client_fd, noxos::kStatusMalformedInput, err);
+    std::vector<uint8_t> payload(payload_len);
+    if (payload_len > 0 && !read_exact(client_fd, payload.data(), payload_len)) {
+        send_response(client_fd, noxos::kStatusMalformedInput,
+                       "{\"error\":\"incomplete payload received\"}");
         return;
     }
 
-    std::string result_json;
-    uint8_t status = (uint8_t)noxos::ParseExif(file_bytes, result_json);
-    send_response(client_fd, status, result_json);
+    switch (task_type) {
+        case TASK_FILE_SCAN:
+            handle_file_scan(client_fd, payload);
+            break;
+        case TASK_NETWORK_SAMPLE:
+            handle_network_sample(client_fd, payload);
+            break;
+        default:
+            send_response(client_fd, noxos::kStatusMalformedInput,
+                           "{\"error\":\"unknown task type\"}");
+            break;
+    }
 }
 
 extern "C" int AVmPayload_main() {
@@ -122,7 +180,7 @@ extern "C" int AVmPayload_main() {
     }
 
     printf("noxos-payload: connection accepted, scanning\n");
-    handle_scan(client_fd);
+    handle_connection(client_fd);
     close(client_fd);
     close(server_fd);
 
