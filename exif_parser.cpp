@@ -2,6 +2,8 @@
 
 #include <cstring>
 
+#include "json_util.h"
+
 namespace noxos {
 namespace {
 
@@ -21,20 +23,6 @@ uint32_t ReadU32Be(const uint8_t* p) {
 uint32_t ReadU32Le(const uint8_t* p) {
     return ((uint32_t)p[3] << 24) | ((uint32_t)p[2] << 16) |
            ((uint32_t)p[1] << 8) | (uint32_t)p[0];
-}
-
-std::string JsonEscape(const std::string& s) {
-    std::string out;
-    out.reserve(s.size() + 4);
-    for (char c : s) {
-        if (c == '"') out += "\\\"";
-        else if (c == '\\') out += "\\\\";
-        else if (c == '\n') out += "\\n";
-        else if (c == '\r') out += "\\r";
-        else if (c == '\t') out += "\\t";
-        else out += c;
-    }
-    return out;
 }
 
 struct ExifTagDef {
