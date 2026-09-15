@@ -3,21 +3,21 @@
     {
       "LaunchTemplateSpecification": {
         "LaunchTemplateId": "lt-00507391f89704313",
-        "Version": "3"
+        "Version": "4"
       },
       "Overrides": [
-        { "InstanceType": "r5.xlarge", "SubnetId": "subnet-0004e42788eb9947a" },
-        { "InstanceType": "r5.xlarge", "SubnetId": "subnet-03e7810ec05743044" },
-        { "InstanceType": "r5.xlarge", "SubnetId": "subnet-0400d54e1b840ca77" },
-        { "InstanceType": "r5.xlarge", "SubnetId": "subnet-0a4e0383c066093b1" },
-        { "InstanceType": "r5.xlarge", "SubnetId": "subnet-09cd42f9dd6603504" },
-        { "InstanceType": "r5.xlarge", "SubnetId": "subnet-04114f5a64aa293b9" },
-        { "InstanceType": "m5.2xlarge", "SubnetId": "subnet-0004e42788eb9947a" },
-        { "InstanceType": "m5.2xlarge", "SubnetId": "subnet-03e7810ec05743044" },
-        { "InstanceType": "m5.2xlarge", "SubnetId": "subnet-0400d54e1b840ca77" },
-        { "InstanceType": "m5.2xlarge", "SubnetId": "subnet-0a4e0383c066093b1" },
-        { "InstanceType": "m5.2xlarge", "SubnetId": "subnet-09cd42f9dd6603504" },
-        { "InstanceType": "m5.2xlarge", "SubnetId": "subnet-04114f5a64aa293b9" }
+        { "InstanceType": "r5.2xlarge", "SubnetId": "subnet-0004e42788eb9947a" },
+        { "InstanceType": "r5.2xlarge", "SubnetId": "subnet-03e7810ec05743044" },
+        { "InstanceType": "r5.2xlarge", "SubnetId": "subnet-0400d54e1b840ca77" },
+        { "InstanceType": "r5.2xlarge", "SubnetId": "subnet-0a4e0383c066093b1" },
+        { "InstanceType": "r5.2xlarge", "SubnetId": "subnet-09cd42f9dd6603504" },
+        { "InstanceType": "r5.2xlarge", "SubnetId": "subnet-04114f5a64aa293b9" },
+        { "InstanceType": "r5a.2xlarge", "SubnetId": "subnet-0004e42788eb9947a" },
+        { "InstanceType": "r5a.2xlarge", "SubnetId": "subnet-03e7810ec05743044" },
+        { "InstanceType": "r5a.2xlarge", "SubnetId": "subnet-0400d54e1b840ca77" },
+        { "InstanceType": "r5a.2xlarge", "SubnetId": "subnet-0a4e0383c066093b1" },
+        { "InstanceType": "r5a.2xlarge", "SubnetId": "subnet-09cd42f9dd6603504" },
+        { "InstanceType": "r5a.2xlarge", "SubnetId": "subnet-04114f5a64aa293b9" }
       ]
     }
   ],
