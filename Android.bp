@@ -23,9 +23,18 @@
 //
 // shared_libs: ["libvm_payload#current"] is not shown in the README's
 // trimmed example above, but was found referenced in an actual AOSP build
-// diff for a real payload module. Included here on that basis; TODO confirm
-// directly against a checked-out AOSP tree in Phase 2 (this file has never
-// been fed through Soong).
+// diff for a real payload module.
+//
+// Confirmed against a real Soong build, 2026-09-15: the README's own
+// sdk_version: "current" example (line 11 above) does NOT combine with
+// shared_libs: ["libvm_payload#current"] - libvm_payload has no sdk-variant
+// build, only a platform one, so sdk_version here produces a real
+// "missing variant" Soong error. Deliberately omitted below, matching
+// packages/modules/Virtualization/android/EmptyPayloadApp/Android.bp's
+// MicrodroidEmptyPayloadJniLib - a real, working AOSP module with the exact
+// same shared_libs dependency and no sdk_version on the native module
+// (only on its wrapping android_app, which doesn't apply here since this
+// repo has no app wrapper).
 
 cc_library_shared {
     name: "noxos_payload_stub",
@@ -39,5 +48,4 @@ cc_library_shared {
     shared_libs: [
         "libvm_payload#current",
     ],
-    sdk_version: "current",
 }
