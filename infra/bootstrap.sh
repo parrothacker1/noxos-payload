@@ -52,7 +52,9 @@ DEV="/dev/$(lsblk -dno NAME,TYPE | awk '$2=="disk"{print $1}' | grep -v "^${ROOT
 
 mkdir -p /mnt/aosp
 mount "$DEV" /mnt/aosp
-chown -R ubuntu:ubuntu /mnt/aosp
+if [ "$(stat -c '%U' /mnt/aosp)" != "ubuntu" ]; then
+  chown -R ubuntu:ubuntu /mnt/aosp
+fi
 
 git config --global --add safe.directory '*'
 
