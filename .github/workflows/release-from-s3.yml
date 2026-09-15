@@ -3,16 +3,12 @@ name: release-from-s3
 on:
   workflow_dispatch:
     inputs:
-      s3_path:
-        description: "Full s3:// path to the built .so, e.g. s3://noxos-releases/payload-build/20260915T170054Z/libnoxos_payload_stub.so"
+      s3_prefix:
+        description: "S3 prefix holding the build's artifacts (one or more ABIs), e.g. s3://noxos-releases/payload-build/20260915T170054Z/"
         required: true
       tag:
-        description: "Release tag, e.g. v0.2.0"
+        description: "Release tag, e.g. v1.1.0"
         required: true
-      abi:
-        description: "ABI suffix for the release asset name"
-        required: false
-        default: "x86_64"
 
 permissions:
   contents: write
@@ -27,14 +23,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Download artifact from S3
-        run: aws s3 cp "${{ inputs.s3_path }}" "./libnoxos_payload_stub-${{ inputs.abi }}.so"
+      - name: Download all artifacts from S3
+        run: |
+          mkdir -p release-assets
+          aws s3 cp --recursive "${{ inputs.s3_prefix }}" release-assets/
 
       - name: Create GitHub Release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           gh release create "${{ inputs.tag }}" \
-            "libnoxos_payload_stub-${{ inputs.abi }}.so" \
+            release-assets/* \
             --title "${{ inputs.tag }}" \
             --generate-notes
