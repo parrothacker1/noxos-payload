@@ -2,8 +2,8 @@
   "LaunchTemplateConfigs": [
     {
       "LaunchTemplateSpecification": {
-        "LaunchTemplateId": "PLACEHOLDER_LAUNCH_TEMPLATE_ID",
-        "Version": "1"
+        "LaunchTemplateId": "lt-00507391f89704313",
+        "Version": "2"
       },
       "Overrides": [
         { "InstanceType": "m5.xlarge", "SubnetId": "subnet-0004e42788eb9947a" },
