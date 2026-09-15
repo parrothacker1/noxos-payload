@@ -56,6 +56,17 @@ if [ "$(stat -c '%U' /mnt/aosp)" != "ubuntu" ]; then
   chown -R ubuntu:ubuntu /mnt/aosp
 fi
 
+# soong_build's full-product-graph analysis for noxos_cf_x86_64_phone has been
+# observed climbing past 25GB+ RSS (session 2026-09-15, real data, not a
+# hypothetical) - real headroom, not just raw instance RAM, since even the
+# 32GB fleet sizing isn't confirmed sufficient alone yet.
+if ! swapon --show | grep -q /mnt/aosp/swapfile; then
+  fallocate -l 24G /mnt/aosp/swapfile
+  chmod 600 /mnt/aosp/swapfile
+  mkswap /mnt/aosp/swapfile
+  swapon /mnt/aosp/swapfile
+fi
+
 git config --global --add safe.directory '*'
 
 set +e
