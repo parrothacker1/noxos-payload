@@ -35,6 +35,15 @@
 // same shared_libs dependency and no sdk_version on the native module
 // (only on its wrapping android_app, which doesn't apply here since this
 // repo has no app wrapper).
+//
+// Also confirmed 2026-09-15: shared_libs: ["libvm_payload#current"] alone is
+// enough to make the real headers (vm_main.h, vm_payload.h) visible to a C++
+// consumer - libvm_payload's own rust_ffi module declares
+// include_dirs: ["include"], which Soong propagates to callers automatically.
+// No header_libs needed here, matching EmptyPayloadApp/empty_binary.cpp (a
+// real, working consumer with the same bare shared_libs dependency). The
+// actual bug turned out to be in payload_main.cpp's own #include path, not
+// here - see that file's history.
 
 cc_library_shared {
     name: "noxos_payload_stub",

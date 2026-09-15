@@ -3,7 +3,8 @@
 #include "json_util.h"
 #include "network_cheap_filter.h"
 
-#include <vm_payload/api.h>
+#include <vm_main.h>
+#include <vm_payload.h>
 
 #include <errno.h>
 #include <linux/vm_sockets.h>
