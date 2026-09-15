@@ -76,12 +76,12 @@ sudo -u ubuntu -H bash -c "
   cd /mnt/aosp
   git clone --branch infra --depth 1 https://github.com/parrothacker1/noxos-payload.git /tmp/noxos-payload-infra
   bash /tmp/noxos-payload-infra/infra/sync-payload.sh
-  bash /tmp/noxos-payload-infra/infra/build-payload.sh
+  bash /tmp/noxos-payload-infra/infra/build-all-abis.sh
 "
 BUILD_EXIT=$?
 set -e
 
-echo "=== build-payload.sh exited with code $BUILD_EXIT ==="
+echo "=== build-all-abis.sh exited with code $BUILD_EXIT ==="
 
 FLEET_ID=$(aws ec2 describe-tags --filters "Name=resource-id,Values=$INSTANCE_ID" "Name=key,Values=aws:ec2:fleet-id" \
   --query 'Tags[0].Value' --output text)
@@ -91,7 +91,7 @@ if [ -n "$FLEET_ID" ] && [ "$FLEET_ID" != "None" ]; then
 fi
 
 if [ "$BUILD_EXIT" -ne 0 ]; then
-  echo "build-payload.sh failed - leaving instance up for inspection instead of terminating"
+  echo "build-all-abis.sh failed - leaving instance up for inspection instead of terminating"
   exit 0
 fi
 
