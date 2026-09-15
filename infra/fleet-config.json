@@ -3,7 +3,7 @@
     {
       "LaunchTemplateSpecification": {
         "LaunchTemplateId": "lt-00507391f89704313",
-        "Version": "4"
+        "Version": "5"
       },
       "Overrides": [
         { "InstanceType": "r5.2xlarge", "SubnetId": "subnet-0004e42788eb9947a" },
