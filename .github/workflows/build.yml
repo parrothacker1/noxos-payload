@@ -1,0 +1,80 @@
+name: build-payload
+
+on:
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  launch-fleet:
+    runs-on: ubuntu-latest
+    outputs:
+      fleet_id: ${{ steps.launch.outputs.fleet_id }}
+    steps:
+      - name: Check out infra setup (kept off main, see infra branch)
+        uses: actions/checkout@v4
+        with:
+          ref: infra
+          path: infra-branch
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_GH_ACTIONS_ROLE_ARN }}
+          aws-region: us-east-1
+      - id: launch
+        run: |
+          FLEET_ID=$(aws ec2 create-fleet --cli-input-json file://infra-branch/infra/fleet-config.json --query FleetId --output text)
+          echo "fleet_id=$FLEET_ID" >> "$GITHUB_OUTPUT"
+
+  watch-build:
+    needs: launch-fleet
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    permissions:
+      id-token: write
+    env:
+      AWS_REGION: us-east-1
+    steps:
+      - run: |
+          FLEET_ID="${{ needs.launch-fleet.outputs.fleet_id }}"
+          ROLE_ARN="${{ secrets.AWS_GH_ACTIONS_ROLE_ARN }}"
+
+          refresh_creds() {
+            ID_TOKEN=$(curl -sS -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+              "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=sts.amazonaws.com" | jq -r '.value')
+            CREDS=$(aws sts assume-role-with-web-identity \
+              --role-arn "$ROLE_ARN" \
+              --role-session-name "watch-payload-build-$(date +%s)" \
+              --web-identity-token "$ID_TOKEN" \
+              --duration-seconds 3600 \
+              --query 'Credentials' --output json)
+            export AWS_ACCESS_KEY_ID=$(echo "$CREDS" | jq -r '.AccessKeyId')
+            export AWS_SECRET_ACCESS_KEY=$(echo "$CREDS" | jq -r '.SecretAccessKey')
+            export AWS_SESSION_TOKEN=$(echo "$CREDS" | jq -r '.SessionToken')
+            echo "AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID" >> "$GITHUB_ENV"
+            echo "AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY" >> "$GITHUB_ENV"
+            echo "AWS_SESSION_TOKEN=$AWS_SESSION_TOKEN" >> "$GITHUB_ENV"
+          }
+
+          refresh_creds
+          BEFORE=$(aws s3api list-objects-v2 --bucket noxos-releases --prefix payload-build/ --query 'length(Contents[])' --output text 2>/dev/null || echo 0)
+          LAST_REFRESH=$(date +%s)
+          while true; do
+            NOW=$(date +%s)
+            if [ $((NOW - LAST_REFRESH)) -gt 2700 ]; then
+              refresh_creds
+              LAST_REFRESH=$NOW
+            fi
+            CAP=$(aws ec2 describe-fleets --fleet-ids "$FLEET_ID" --query 'Fleets[0].TargetCapacitySpecification.TotalTargetCapacity' --output text)
+            AFTER=$(aws s3api list-objects-v2 --bucket noxos-releases --prefix payload-build/ --query 'length(Contents[])' --output text 2>/dev/null || echo 0)
+            if [ "$AFTER" -gt "$BEFORE" ]; then
+              echo "build artifact uploaded to s3://noxos-releases/payload-build/"
+              exit 0
+            fi
+            if [ "$CAP" = "0" ]; then
+              echo "fleet scaled to zero without a new S3 artifact - treating as failure"
+              exit 1
+            fi
+            sleep 60
+          done
