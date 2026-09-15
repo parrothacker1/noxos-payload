@@ -13,8 +13,8 @@ set -euo pipefail
 export HOME=/root
 exec > /var/log/noxos-payload-bootstrap.log 2>&1
 
-apt-get update -y
-apt-get install -y awscli git
+# ami-0aa111eb1f0bcbc94 already has awscli/git/repo/JDK baked in - no apt-get
+# needed here, unlike a stock Ubuntu AMI.
 
 imds_token() { curl -s -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 300"; }
 imds() { curl -s -H "X-aws-ec2-metadata-token: $(imds_token)" "http://169.254.169.254/latest/meta-data/$1"; }
