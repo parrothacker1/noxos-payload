@@ -29,6 +29,7 @@
 
 cc_library_shared {
     name: "noxos_payload_stub",
+    stem: "libnoxos_payload_stub",
     srcs: [
         "payload_main.cpp",
         "exif_parser.cpp",
