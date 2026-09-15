@@ -4,6 +4,6 @@
   },
   "task": {
     "type": "microdroid_launcher",
-    "command": "noxos_payload_stub.so"
+    "command": "libnoxos_payload_stub.so"
   }
 }
