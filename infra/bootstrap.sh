@@ -83,6 +83,13 @@ set -e
 
 echo "=== build-all-abis.sh exited with code $BUILD_EXIT ==="
 
+KEEP_ALIVE=$(aws ec2 describe-tags --filters "Name=resource-id,Values=$INSTANCE_ID" "Name=key,Values=KeepAlive" \
+  --query 'Tags[0].Value' --output text)
+if [ "$KEEP_ALIVE" = "true" ]; then
+  echo "KeepAlive=true tag set on this instance - leaving fleet and instance up for reuse, not scaling down or terminating"
+  exit 0
+fi
+
 FLEET_ID=$(aws ec2 describe-tags --filters "Name=resource-id,Values=$INSTANCE_ID" "Name=key,Values=aws:ec2:fleet-id" \
   --query 'Tags[0].Value' --output text)
 if [ -n "$FLEET_ID" ] && [ "$FLEET_ID" != "None" ]; then
