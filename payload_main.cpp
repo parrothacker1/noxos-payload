@@ -142,6 +142,11 @@ static void handle_connection(int client_fd) {
 }
 
 extern "C" int AVmPayload_main() {
+    setvbuf(stdin, nullptr, _IONBF, 0);
+    setvbuf(stdout, nullptr, _IONBF, 0);
+    setvbuf(stderr, nullptr, _IONBF, 0);
+
+    printf("noxos-payload: AVmPayload_main entered\n");
     printf("noxos-payload: starting EXIF parser on vsock port %u\n", VSOCK_PORT);
 
     int server_fd = socket(AF_VSOCK, SOCK_STREAM, 0);
