@@ -169,6 +169,8 @@ extern "C" int AVmPayload_main() {
 
     printf("noxos-payload: listening for scan requests\n");
 
+    AVmPayload_notifyPayloadReady();
+
     struct sockaddr_vm client_addr = {};
     socklen_t addr_len = sizeof(client_addr);
     int client_fd = accept(server_fd,
