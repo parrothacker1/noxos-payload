@@ -32,10 +32,16 @@ push_logs() {
 }
 trap push_logs EXIT
 
-VOL_TAG_NAME="noxos-aosp-src"
-SNAP_ID=$(aws ec2 describe-snapshots --owner-ids self \
-  --filters "Name=tag:Name,Values=$VOL_TAG_NAME" "Name=status,Values=completed" \
-  --query 'sort_by(Snapshots,&StartTime)[-1].SnapshotId' --output text)
+RESUME_SNAP_ID=$(aws ec2 describe-tags --filters "Name=resource-id,Values=$INSTANCE_ID" "Name=key,Values=ResumeSnapshotId" \
+  --query 'Tags[0].Value' --output text)
+if [ -n "$RESUME_SNAP_ID" ] && [ "$RESUME_SNAP_ID" != "None" ]; then
+  SNAP_ID="$RESUME_SNAP_ID"
+else
+  VOL_TAG_NAME="noxos-aosp-src"
+  SNAP_ID=$(aws ec2 describe-snapshots --owner-ids self \
+    --filters "Name=tag:Name,Values=$VOL_TAG_NAME" "Name=status,Values=completed" \
+    --query 'sort_by(Snapshots,&StartTime)[-1].SnapshotId' --output text)
+fi
 USE_VOL=$(aws ec2 create-volume --availability-zone "$AZ" --snapshot-id "$SNAP_ID" --size 620 \
   --volume-type gp3 --tag-specifications "ResourceType=volume,Tags=[{Key=Name,Value=noxos-payload-build-src}]" \
   --query 'VolumeId' --output text)
