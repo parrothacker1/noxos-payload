@@ -2,6 +2,8 @@
 
 #include <cassert>
 #include <cstdio>
+#include <cstring>
+#include <string>
 #include <vector>
 
 namespace {
@@ -66,6 +68,48 @@ int main() {
         auto jpeg = BuildJpeg(40, /*with_eoi=*/false, /*with_sos=*/true);
         noxos::CheapFilterResult r = noxos::CheckFileCheapFilter(jpeg);
         assert(!r.flagged);
+    }
+
+    {
+        const std::string eicar =
+            "X5O!P%@AP[4\\PZX54(P^)7CC)7}$EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*";
+        std::vector<uint8_t> txt(eicar.begin(), eicar.end());
+        noxos::CheapFilterResult r = noxos::CheckFileCheapFilter(txt);
+        assert(r.flagged);
+        assert(r.reason.find("EICAR") != std::string::npos);
+    }
+
+    {
+        std::vector<uint8_t> elf = {0x7F, 'E', 'L', 'F'};
+        for (size_t i = 0; i < 8192; i++) elf.push_back((uint8_t)("mov eax"[i % 7]));
+        assert(!noxos::CheckFileCheapFilter(elf).flagged);
+
+        std::vector<uint8_t> upx = elf;
+        memcpy(upx.data() + 200, "UPX!", 4);
+        noxos::CheapFilterResult r = noxos::CheckFileCheapFilter(upx);
+        assert(r.flagged);
+        assert(r.reason.find("UPX") != std::string::npos);
+
+        std::vector<uint8_t> packed = {'M', 'Z'};
+        uint32_t x = 2463534242u;
+        for (size_t i = 0; i < 65536; i++) {
+            x ^= x << 13; x ^= x >> 17; x ^= x << 5;
+            packed.push_back((uint8_t)x);
+        }
+        r = noxos::CheckFileCheapFilter(packed);
+        assert(r.flagged);
+        assert(r.reason.find("entropy") != std::string::npos);
+    }
+
+    {
+        std::vector<uint8_t> random_blob;
+        uint32_t x = 88172645u;
+        for (size_t i = 0; i < 65536; i++) {
+            x ^= x << 13; x ^= x >> 17; x ^= x << 5;
+            random_blob.push_back((uint8_t)x);
+        }
+        random_blob[0] = 0x89;
+        assert(!noxos::CheckFileCheapFilter(random_blob).flagged);
     }
 
     printf("ok: file_cheap_filter_test passed\n");

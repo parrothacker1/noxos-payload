@@ -52,10 +52,13 @@ cc_library_shared {
         "payload_main.cpp",
         "exif_parser.cpp",
         "file_cheap_filter.cpp",
-        "network_cheap_filter.cpp",
+        "zip_scan.cpp",
     ],
     shared_libs: [
         "libvm_payload#current",
+    ],
+    static_libs: [
+        "libz",
     ],
     stl: "libc++_static",
 }

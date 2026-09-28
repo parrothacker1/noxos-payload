@@ -1,12 +1,19 @@
 #include "file_cheap_filter.h"
 
+#include <algorithm>
+#include <cstdio>
 #include <cstring>
+
+#include "scan_util.h"
 
 namespace noxos {
 namespace {
 
 constexpr size_t kMinScanDataBytes = 32;
 constexpr size_t kMaxBenignTrailerBytes = 4096;
+constexpr size_t kUpxProbeBytes = 4096;
+constexpr size_t kMinEntropySampleBytes = 4096;
+constexpr double kPackedExecutableEntropy = 7.2;
 
 uint16_t ReadU16Be(const uint8_t* p) {
     return (uint16_t)((p[0] << 8) | p[1]);
@@ -81,10 +88,47 @@ bool FindLastEoi(const std::vector<uint8_t>& b, size_t start, size_t* eoi_pos) {
     return false;
 }
 
+CheapFilterResult CheckNonJpeg(const std::vector<uint8_t>& b) {
+    CheapFilterResult result;
+    if (const char* sig = FindKnownBadSignature(b.data(), b.size())) {
+        result.flagged = true;
+        result.reason = std::string("contains ") + sig;
+        return result;
+    }
+    bool elf = b.size() >= 4 && memcmp(b.data(), "\x7F""ELF", 4) == 0;
+    bool pe = b.size() >= 2 && b[0] == 'M' && b[1] == 'Z';
+    if (!elf && !pe) return result;
+    if (ContainsBytes(b.data(), std::min(b.size(), kUpxProbeBytes), "UPX!", 4)) {
+        result.flagged = true;
+        result.reason = "UPX-packed executable";
+        return result;
+    }
+    if (b.size() >= kMinEntropySampleBytes) {
+        double h = ShannonEntropy(b.data(), b.size());
+        if (h > kPackedExecutableEntropy) {
+            char buf[96];
+            snprintf(buf, sizeof(buf),
+                     "executable entropy %.2f bits/byte suggests packed or encrypted code", h);
+            result.flagged = true;
+            result.reason = buf;
+        }
+    }
+    return result;
+}
+
 }  // namespace
 
 CheapFilterResult CheckFileCheapFilter(const std::vector<uint8_t>& file_bytes) {
+    if (file_bytes.size() < 2 || file_bytes[0] != 0xFF || file_bytes[1] != 0xD8) {
+        return CheckNonJpeg(file_bytes);
+    }
+
     CheapFilterResult result;
+    if (const char* sig = FindKnownBadSignature(file_bytes.data(), file_bytes.size())) {
+        result.flagged = true;
+        result.reason = std::string("contains ") + sig;
+        return result;
+    }
 
     size_t scan_start;
     if (!FindScanDataStart(file_bytes, &scan_start)) {

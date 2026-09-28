@@ -19,10 +19,10 @@ jobs:
         run: clang++ -std=c++17 -g -fsanitize=address,undefined -o file_cf_test file_cheap_filter.cpp test/file_cheap_filter_test.cpp
       - name: Run file cheap filter self-check
         run: ./file_cf_test
-      - name: Build network cheap filter self-check
-        run: clang++ -std=c++17 -g -fsanitize=address,undefined -o net_cf_test network_cheap_filter.cpp test/network_cheap_filter_test.cpp
-      - name: Run network cheap filter self-check
-        run: ./net_cf_test
+      - name: Build ZIP/APK scanner self-check
+        run: clang++ -std=c++17 -g -fsanitize=address,undefined -o zip_scan_test zip_scan.cpp test/zip_scan_test.cpp -lz
+      - name: Run ZIP/APK scanner self-check
+        run: ./zip_scan_test
 
   fuzz:
     runs-on: ubuntu-latest
@@ -36,7 +36,7 @@ jobs:
         run: clang++ -std=c++17 -g -O1 -fsanitize=fuzzer,address,undefined -o file_cf_fuzzer file_cheap_filter.cpp fuzz/file_cheap_filter_fuzzer.cpp
       - name: Run bounded file cheap filter fuzz pass
         run: mkdir -p corpus_file_cf && ./file_cf_fuzzer corpus_file_cf -max_total_time=60 -print_final_stats=1
-      - name: Build network cheap filter fuzzer
-        run: clang++ -std=c++17 -g -O1 -fsanitize=fuzzer,address,undefined -o net_cf_fuzzer network_cheap_filter.cpp fuzz/network_cheap_filter_fuzzer.cpp
-      - name: Run bounded network cheap filter fuzz pass
-        run: mkdir -p corpus_net_cf && ./net_cf_fuzzer corpus_net_cf -max_total_time=60 -print_final_stats=1
+      - name: Build ZIP/APK scanner fuzzer
+        run: clang++ -std=c++17 -g -O1 -fsanitize=fuzzer,address,undefined -fno-sanitize-recover=all -o zip_fuzzer zip_scan.cpp fuzz/zip_scan_fuzzer.cpp -lz
+      - name: Run bounded ZIP/APK scanner fuzz pass
+        run: mkdir -p corpus_zip && cp fuzz/seeds_zip/* corpus_zip/ && ./zip_fuzzer corpus_zip -max_total_time=60 -print_final_stats=1
