@@ -23,6 +23,14 @@ jobs:
         run: clang++ -std=c++17 -g -fsanitize=address,undefined -o zip_scan_test zip_scan.cpp test/zip_scan_test.cpp -lz
       - name: Run ZIP/APK scanner self-check
         run: ./zip_scan_test
+      - name: Build PDF scanner self-check
+        run: clang++ -std=c++17 -g -fsanitize=address,undefined -o pdf_scan_test pdf_scan.cpp test/pdf_scan_test.cpp -lz
+      - name: Run PDF scanner self-check
+        run: ./pdf_scan_test
+      - name: Build file scan pipeline self-check
+        run: clang++ -std=c++17 -g -fsanitize=address,undefined -o file_scan_test file_scan.cpp file_type.cpp zip_scan.cpp pdf_scan.cpp exif_parser.cpp file_cheap_filter.cpp test/file_scan_test.cpp -lz
+      - name: Run file scan pipeline self-check
+        run: ./file_scan_test
 
   fuzz:
     runs-on: ubuntu-latest
@@ -40,3 +48,11 @@ jobs:
         run: clang++ -std=c++17 -g -O1 -fsanitize=fuzzer,address,undefined -fno-sanitize-recover=all -o zip_fuzzer zip_scan.cpp fuzz/zip_scan_fuzzer.cpp -lz
       - name: Run bounded ZIP/APK scanner fuzz pass
         run: mkdir -p corpus_zip && cp fuzz/seeds_zip/* corpus_zip/ && ./zip_fuzzer corpus_zip -max_total_time=60 -print_final_stats=1
+      - name: Build PDF scanner fuzzer
+        run: clang++ -std=c++17 -g -O1 -fsanitize=fuzzer,address,undefined -fno-sanitize-recover=all -o pdf_fuzzer pdf_scan.cpp fuzz/pdf_scan_fuzzer.cpp -lz
+      - name: Run bounded PDF scanner fuzz pass
+        run: mkdir -p corpus_pdf && cp fuzz/seeds_pdf/* corpus_pdf/ && ./pdf_fuzzer corpus_pdf -max_total_time=60 -max_len=65536 -print_final_stats=1
+      - name: Build file scan pipeline fuzzer
+        run: clang++ -std=c++17 -g -O1 -fsanitize=fuzzer,address,undefined -fno-sanitize-recover=all -o file_scan_fuzzer file_scan.cpp file_type.cpp zip_scan.cpp pdf_scan.cpp exif_parser.cpp file_cheap_filter.cpp fuzz/file_scan_fuzzer.cpp -lz
+      - name: Run bounded file scan pipeline fuzz pass
+        run: mkdir -p corpus_fs && cp fuzz/seeds/* fuzz/seeds_pdf/* fuzz/seeds_zip/* corpus_fs/ && ./file_scan_fuzzer corpus_fs -max_total_time=60 -max_len=65536 -print_final_stats=1

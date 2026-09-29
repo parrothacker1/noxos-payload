@@ -1,7 +1,5 @@
 #include "exif_parser.h"
-#include "file_cheap_filter.h"
-#include "json_util.h"
-#include "zip_scan.h"
+#include "file_scan.h"
 
 #include <vm_main.h>
 #include <vm_payload.h>
@@ -20,6 +18,7 @@
 static constexpr uint32_t VSOCK_PORT = 5000;
 static constexpr size_t MAX_PAYLOAD_BYTES = 150 * 1024 * 1024;
 static constexpr uint8_t TASK_FILE_SCAN = 0;
+static constexpr uint8_t TASK_FILE_SCAN_WITH_META = 2;
 
 static uint32_t read_u32_be(const uint8_t* p) {
     return ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) |
@@ -61,38 +60,8 @@ static void send_response(int fd, uint8_t status, const std::string& json) {
     write_exact(fd, reinterpret_cast<const uint8_t*>(json.data()), json_len);
 }
 
-static void handle_file_scan(int client_fd, const std::vector<uint8_t>& payload) {
-    if (payload.empty()) {
-        send_response(client_fd, noxos::kStatusMalformedInput,
-                       "{\"error\":\"file size out of range\"}");
-        return;
-    }
-
-    std::string result_json;
-    uint8_t status;
-    noxos::CheapFilterResult cheap;
-    bool is_jpeg = payload.size() >= 2 && payload[0] == 0xFF && payload[1] == 0xD8;
-
-    if (!is_jpeg && noxos::LooksLikeZip(payload)) {
-        status = noxos::kStatusOk;
-        cheap = noxos::ScanZip(payload, result_json);
-    } else {
-        status = (uint8_t)noxos::ParseExif(payload, result_json);
-        cheap = noxos::CheckFileCheapFilter(payload);
-        if (cheap.flagged && status != noxos::kStatusOk) {
-            status = noxos::kStatusOk;
-            result_json = "{}";
-        }
-    }
-
-    if (status == noxos::kStatusOk && cheap.flagged) {
-        result_json.pop_back();
-        if (result_json.size() > 1) result_json += ",";
-        result_json += "\"cheap_filter_flagged\":true,\"cheap_filter_reason\":\"" +
-                        noxos::JsonEscape(cheap.reason) + "\"}";
-    }
-
-    send_response(client_fd, status, result_json);
+static void send_scan_result(int fd, const noxos::FileScanOutput& r) {
+    send_response(fd, r.status, r.json);
 }
 
 static void handle_connection(int client_fd) {
@@ -109,7 +78,7 @@ static void handle_connection(int client_fd) {
     }
     uint32_t payload_len = read_u32_be(len_buf);
 
-    if (payload_len > MAX_PAYLOAD_BYTES) {
+    if (payload_len > MAX_PAYLOAD_BYTES + noxos::kMaxFileScanMetaBytes) {
         send_response(client_fd, noxos::kStatusMalformedInput,
                        "{\"error\":\"payload size out of range\"}");
         return;
@@ -124,8 +93,29 @@ static void handle_connection(int client_fd) {
 
     switch (task_type) {
         case TASK_FILE_SCAN:
-            handle_file_scan(client_fd, payload);
+            if (payload_len > MAX_PAYLOAD_BYTES) {
+                send_response(client_fd, noxos::kStatusMalformedInput,
+                               "{\"error\":\"payload size out of range\"}");
+                break;
+            }
+            send_scan_result(client_fd, noxos::ScanFile(payload, nullptr, nullptr));
             break;
+        case TASK_FILE_SCAN_WITH_META: {
+            std::string name;
+            std::string mime;
+            if (!noxos::StripFileScanMeta(payload, name, mime)) {
+                send_response(client_fd, noxos::kStatusMalformedInput,
+                               "{\"error\":\"malformed file scan metadata\"}");
+                break;
+            }
+            if (payload.size() > MAX_PAYLOAD_BYTES) {
+                send_response(client_fd, noxos::kStatusMalformedInput,
+                               "{\"error\":\"payload size out of range\"}");
+                break;
+            }
+            send_scan_result(client_fd, noxos::ScanFile(payload, &name, &mime));
+            break;
+        }
         default:
             send_response(client_fd, noxos::kStatusMalformedInput,
                            "{\"error\":\"unknown task type\"}");

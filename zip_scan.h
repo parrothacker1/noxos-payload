@@ -10,6 +10,7 @@ namespace noxos {
 
 bool LooksLikeZip(const std::vector<uint8_t>& file_bytes);
 
-CheapFilterResult ScanZip(const std::vector<uint8_t>& file_bytes, std::string& out_json);
+CheapFilterResult ScanZip(const std::vector<uint8_t>& file_bytes, std::string& out_json,
+                          std::string* out_type = nullptr);
 
 }  // namespace noxos

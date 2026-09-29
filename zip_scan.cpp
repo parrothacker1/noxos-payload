@@ -33,6 +33,12 @@ constexpr size_t kDexSampleBytes = 1024 * 1024;
 constexpr size_t kMinEntropySampleBytes = 4096;
 constexpr double kPackedDexEntropy = 7.2;
 constexpr size_t kMaxAxmlStrings = 100000;
+constexpr size_t kMaxRelsBytes = 1024 * 1024;
+constexpr size_t kMaxRelsFiles = 256;
+
+const char* const kDangerousExternalRelTypes[] = {
+    "attachedTemplate", "oleObject", "frame", "subDocument",
+};
 
 constexpr uint32_t kApkSigV2 = 0x7109871a;
 constexpr uint32_t kApkSigV3 = 0xf05368c0;
@@ -65,6 +71,7 @@ const char* const kDataExtensions[] = {
 
 struct Entry {
     std::string name;
+    bool encrypted = false;
     uint16_t method;
     uint32_t comp;
     uint32_t uncomp;
@@ -75,10 +82,27 @@ struct Entry {
 
 struct Meta {
     bool is_apk = false;
+    bool is_ooxml = false;
     size_t entries = 0;
     const char* signing = "none";
     size_t permission_strings = 0;
     size_t high_risk_permissions = 0;
+    bool ooxml_macros = false;
+    size_t ooxml_activex = 0;
+    size_t ooxml_embeddings = 0;
+    size_t ooxml_external_rels = 0;
+    size_t encrypted_entries = 0;
+    uint64_t uncompressed_total = 0;
+    std::string dex_version;
+    double dex_entropy = -1.0;
+};
+
+struct Flags {
+    std::string first;
+    size_t count = 0;
+    void Add(std::string reason) {
+        if (count++ == 0) first = std::move(reason);
+    }
 };
 
 bool InflatePrefix(const uint8_t* src, size_t src_len, uint16_t method, size_t max_out,
@@ -197,45 +221,108 @@ bool ParseAxmlStrings(const std::vector<uint8_t>& x, std::vector<std::string>& o
     return true;
 }
 
-std::string CheckDex(const std::vector<uint8_t>& b, const Entry& e) {
+std::string XmlAttr(const std::string& tag, const char* attr) {
+    std::string key = std::string(" ") + attr + "=";
+    size_t k = tag.find(key);
+    if (k == std::string::npos) return "";
+    size_t q = k + key.size();
+    if (q >= tag.size() || (tag[q] != '"' && tag[q] != '\'')) return "";
+    size_t end = tag.find(tag[q], q + 1);
+    if (end == std::string::npos) return "";
+    return tag.substr(q + 1, end - q - 1);
+}
+
+std::string CheckRels(const std::vector<uint8_t>& xml, Meta& meta) {
+    std::string s(xml.begin(), xml.end());
+    std::string reason;
+    size_t pos = 0;
+    while ((pos = s.find("<Relationship ", pos)) != std::string::npos) {
+        size_t end = s.find('>', pos);
+        if (end == std::string::npos) break;
+        std::string tag = s.substr(pos, end - pos);
+        pos = end;
+        if (XmlAttr(tag, "TargetMode") != "External") continue;
+        meta.ooxml_external_rels++;
+        std::string type = XmlAttr(tag, "Type");
+        std::string kind = type.substr(type.find_last_of('/') + 1);
+        for (const char* bad : kDangerousExternalRelTypes) {
+            if (kind == bad && reason.empty()) {
+                reason = "Office document loads an external " + kind + " from \"" +
+                         XmlAttr(tag, "Target").substr(0, 200) + "\"";
+            }
+        }
+    }
+    return reason;
+}
+
+std::string CheckOoxml(const std::vector<uint8_t>& b, const std::vector<Entry>& entries, Meta& meta) {
+    std::vector<uint8_t> buf;
+    size_t rels_seen = 0;
+    std::string reason;
+    for (const auto& e : entries) {
+        std::string lower = e.name;
+        for (char& ch : lower) ch = (char)tolower((unsigned char)ch);
+        std::string ext = LowerExtension(e.name);
+        if (lower.size() >= 14 && lower.compare(lower.size() - 14, 14, "vbaproject.bin") == 0) {
+            meta.ooxml_macros = true;
+        }
+        if (lower.find("/activex/") != std::string::npos && ext == "bin") meta.ooxml_activex++;
+        if (lower.find("/embeddings/") != std::string::npos) meta.ooxml_embeddings++;
+        if (ext != "rels" || rels_seen >= kMaxRelsFiles || e.uncomp > kMaxRelsBytes) continue;
+        rels_seen++;
+        if (!InflatePrefix(b.data() + e.data_off, e.comp, e.method, e.uncomp, buf)) continue;
+        std::string r = CheckRels(buf, meta);
+        if (reason.empty()) reason = r;
+    }
+    if (meta.ooxml_macros) return "Office document contains VBA macros (vbaProject.bin)";
+    if (meta.ooxml_activex > 0) return "Office document contains ActiveX controls";
+    return reason;
+}
+
+void CheckDex(const std::vector<uint8_t>& b, const Entry& e, Meta& meta, Flags& flags) {
     std::vector<uint8_t> dex;
     if (!InflatePrefix(b.data() + e.data_off, e.comp, e.method,
                        std::min<size_t>(e.uncomp, kDexHeaderLen + kDexSampleBytes), dex)) {
-        return "classes.dex could not be decompressed";
+        flags.Add("classes.dex could not be decompressed");
+        return;
     }
-    if (dex.size() < kDexHeaderLen) return "classes.dex is shorter than a DEX header";
+    if (dex.size() < kDexHeaderLen) {
+        flags.Add("classes.dex is shorter than a DEX header");
+        return;
+    }
     const uint8_t* h = dex.data();
     if (memcmp(h, "dex\n", 4) != 0 || h[7] != 0 || !isdigit(h[4]) || !isdigit(h[5]) ||
         !isdigit(h[6])) {
-        return "classes.dex has no valid DEX magic";
+        flags.Add("classes.dex has no valid DEX magic");
+    } else {
+        meta.dex_version.assign(reinterpret_cast<const char*>(h + 4), 3);
     }
-    if (ReadU32Le(h + 0x28) != 0x12345678) return "classes.dex has a non-standard endian tag";
-    if (ReadU32Le(h + 0x24) != kDexHeaderLen) return "classes.dex header_size is not 0x70";
+    if (ReadU32Le(h + 0x28) != 0x12345678) flags.Add("classes.dex has a non-standard endian tag");
+    if (ReadU32Le(h + 0x24) != kDexHeaderLen) flags.Add("classes.dex header_size is not 0x70");
     uint32_t file_size = ReadU32Le(h + 0x20);
     if (file_size != e.uncomp) {
-        return "classes.dex header declares " + std::to_string(file_size) +
-               " bytes but the entry is " + std::to_string(e.uncomp);
+        flags.Add("classes.dex header declares " + std::to_string(file_size) +
+                  " bytes but the entry is " + std::to_string(e.uncomp));
     }
     uint32_t map_off = ReadU32Le(h + 0x34);
-    if (map_off == 0 || map_off >= file_size) return "classes.dex map_off is out of bounds";
+    if (map_off == 0 || map_off >= file_size) flags.Add("classes.dex map_off is out of bounds");
     uint64_t data_end = (uint64_t)ReadU32Le(h + 0x6C) + ReadU32Le(h + 0x68);
-    if (data_end > file_size) return "classes.dex data section runs past end of file";
+    if (data_end > file_size) flags.Add("classes.dex data section runs past end of file");
 
     if (const char* sig = FindKnownBadSignature(dex.data(), dex.size())) {
-        return std::string("classes.dex contains ") + sig;
+        flags.Add(std::string("classes.dex contains ") + sig);
     }
     size_t body = dex.size() - kDexHeaderLen;
     if (body >= kMinEntropySampleBytes) {
-        double h_bits = ShannonEntropy(dex.data() + kDexHeaderLen, body);
-        if (h_bits > kPackedDexEntropy) {
+        meta.dex_entropy = ShannonEntropy(dex.data() + kDexHeaderLen, body);
+        if (meta.dex_entropy > kPackedDexEntropy) {
             char buf[96];
             snprintf(buf, sizeof(buf),
                      "classes.dex entropy %.2f bits/byte suggests packed or encrypted code",
-                     h_bits);
-            return buf;
+                     meta.dex_entropy);
+            flags.Add(buf);
         }
     }
-    return "";
 }
 
 size_t FindEocd(const std::vector<uint8_t>& b) {
@@ -247,31 +334,41 @@ size_t FindEocd(const std::vector<uint8_t>& b) {
     return SIZE_MAX;
 }
 
-std::string ScanZipImpl(const std::vector<uint8_t>& b, Meta& meta) {
+void ScanZipImpl(const std::vector<uint8_t>& b, Meta& meta, Flags& flags) {
     const size_t size = b.size();
     if (const char* sig = FindKnownBadSignature(b.data(), size)) {
-        return std::string("contains ") + sig;
+        flags.Add(std::string("contains ") + sig);
     }
-    if (size < kEocdLen) return "ZIP too small to hold an end-of-central-directory record";
+    if (size < kEocdLen) {
+        flags.Add("ZIP too small to hold an end-of-central-directory record");
+        return;
+    }
 
     size_t eocd = FindEocd(b);
-    if (eocd == SIZE_MAX) return "no ZIP end-of-central-directory record found";
+    if (eocd == SIZE_MAX) {
+        flags.Add("no ZIP end-of-central-directory record found");
+        return;
+    }
 
     size_t comment_len = ReadU16Le(b.data() + eocd + 20);
     size_t eocd_end = eocd + kEocdLen + comment_len;
-    if (eocd_end > size) return "ZIP end record comment runs past end of file";
+    if (eocd_end > size) {
+        flags.Add("ZIP end record comment runs past end of file");
+        return;
+    }
     if (eocd_end < size) {
-        return std::to_string(size - eocd_end) + " bytes of appended data after ZIP end record";
+        flags.Add(std::to_string(size - eocd_end) + " bytes of appended data after ZIP end record");
     }
 
     size_t total = ReadU16Le(b.data() + eocd + 10);
     size_t cd_size = ReadU32Le(b.data() + eocd + 12);
     size_t cd_off = ReadU32Le(b.data() + eocd + 16);
-    if (total == 0xFFFF || cd_off == 0xFFFFFFFF) return "";
+    if (total == 0xFFFF || cd_off == 0xFFFFFFFF) return;
     if (cd_off > eocd || cd_size > eocd - cd_off) {
-        return "ZIP central directory lies outside the file";
+        flags.Add("ZIP central directory lies outside the file");
+        return;
     }
-    if (cd_off + cd_size != eocd) return "unexplained data between ZIP central directory and end record";
+    if (cd_off + cd_size != eocd) flags.Add("unexplained data between ZIP central directory and end record");
 
     size_t archive_end = cd_off;
     size_t sig_block = SIZE_MAX;
@@ -279,61 +376,81 @@ std::string ScanZipImpl(const std::vector<uint8_t>& b, Meta& meta) {
         uint64_t block_size = ReadU64Le(b.data() + cd_off - 24);
         if (block_size < 24 || block_size > cd_off - 8 ||
             ReadU64Le(b.data() + cd_off - block_size - 8) != block_size) {
-            return "malformed APK Signing Block";
+            flags.Add("malformed APK Signing Block");
+        } else {
+            sig_block = cd_off - (size_t)block_size - 8;
+            archive_end = sig_block;
         }
-        sig_block = cd_off - (size_t)block_size - 8;
-        archive_end = sig_block;
     }
 
     std::vector<Entry> entries;
     std::set<std::string> names;
-    uint64_t total_uncomp = 0;
+    bool total_bomb = false;
+    bool cd_broken = false;
     size_t p = cd_off;
     for (size_t i = 0; i < total; i++) {
         if (p + kCdLen > eocd || ReadU32Le(b.data() + p) != kCdSig) {
-            return "ZIP central directory entry " + std::to_string(i) + " is malformed";
+            flags.Add("ZIP central directory entry " + std::to_string(i) + " is malformed");
+            cd_broken = true;
+            break;
         }
         Entry e;
+        uint16_t gp_flags = ReadU16Le(b.data() + p + 8);
         e.method = ReadU16Le(b.data() + p + 10);
         e.comp = ReadU32Le(b.data() + p + 20);
         e.uncomp = ReadU32Le(b.data() + p + 24);
         size_t name_len = ReadU16Le(b.data() + p + 28);
         size_t var_len = name_len + ReadU16Le(b.data() + p + 30) + ReadU16Le(b.data() + p + 32);
         e.local_off = ReadU32Le(b.data() + p + 42);
-        if (var_len > eocd - p - kCdLen) return "ZIP central directory entry runs past its end";
+        if (var_len > eocd - p - kCdLen) {
+            flags.Add("ZIP central directory entry runs past its end");
+            cd_broken = true;
+            break;
+        }
         e.name.assign(reinterpret_cast<const char*>(b.data() + p + kCdLen), name_len);
         p += kCdLen + var_len;
 
-        if (IsPathTraversal(e.name)) return "path traversal in ZIP entry name \"" + e.name + "\"";
-        if (!names.insert(e.name).second) return "duplicate ZIP entry name \"" + e.name + "\"";
-        total_uncomp += e.uncomp;
-        if (e.uncomp >= kBombMinEntryBytes && e.uncomp > kBombRatio * (uint64_t)e.comp) {
-            return "ZIP entry \"" + e.name + "\" expands " +
-                   std::to_string(e.uncomp / std::max<uint32_t>(e.comp, 1)) + "x (zip bomb)";
+        if (IsPathTraversal(e.name)) flags.Add("path traversal in ZIP entry name \"" + e.name + "\"");
+        if (gp_flags & 0x0001) {
+            e.encrypted = true;
+            meta.encrypted_entries++;
+            flags.Add("ZIP entry \"" + e.name + "\" is encrypted; its contents cannot be inspected");
         }
-        if (total_uncomp > kBombTotalBytes) return "ZIP declares over 1 GiB of uncompressed data (zip bomb)";
+        if (!names.insert(e.name).second) flags.Add("duplicate ZIP entry name \"" + e.name + "\"");
+        meta.uncompressed_total += e.uncomp;
+        if (e.uncomp >= kBombMinEntryBytes && e.uncomp > kBombRatio * (uint64_t)e.comp) {
+            flags.Add("ZIP entry \"" + e.name + "\" expands " +
+                      std::to_string(e.uncomp / std::max<uint32_t>(e.comp, 1)) + "x (zip bomb)");
+        }
+        if (!total_bomb && meta.uncompressed_total > kBombTotalBytes) {
+            total_bomb = true;
+            flags.Add("ZIP declares over 1 GiB of uncompressed data (zip bomb)");
+        }
 
         if (e.local_off > archive_end || archive_end - e.local_off < kLocalLen ||
             ReadU32Le(b.data() + e.local_off) != kLocalSig) {
-            return "ZIP entry \"" + e.name + "\" has no valid local header";
+            flags.Add("ZIP entry \"" + e.name + "\" has no valid local header");
+            continue;
         }
         size_t lname = ReadU16Le(b.data() + e.local_off + 26);
         size_t lvar = lname + ReadU16Le(b.data() + e.local_off + 28);
         if (lvar > archive_end - e.local_off - kLocalLen) {
-            return "ZIP entry \"" + e.name + "\" local header runs past archive data";
+            flags.Add("ZIP entry \"" + e.name + "\" local header runs past archive data");
+            continue;
         }
         if (lname != name_len ||
             memcmp(b.data() + e.local_off + kLocalLen, e.name.data(), name_len) != 0) {
-            return "ZIP entry \"" + e.name + "\" local and central names differ";
+            flags.Add("ZIP entry \"" + e.name + "\" local and central names differ");
         }
         e.data_off = e.local_off + kLocalLen + lvar;
         if (e.comp > archive_end - e.data_off) {
-            return "ZIP entry \"" + e.name + "\" data runs past archive data";
+            flags.Add("ZIP entry \"" + e.name + "\" data runs past archive data");
+            continue;
         }
         e.data_end = e.data_off + e.comp;
         entries.push_back(std::move(e));
     }
-    if (p != eocd) return "ZIP central directory size does not match its entries";
+    if (!cd_broken && p != eocd) flags.Add("ZIP central directory size does not match its entries");
     meta.entries = entries.size();
 
     std::vector<const Entry*> by_off;
@@ -342,12 +459,13 @@ std::string ScanZipImpl(const std::vector<uint8_t>& b, Meta& meta) {
               [](const Entry* a, const Entry* c) { return a->local_off < c->local_off; });
     if (!by_off.empty() && by_off[0]->local_off > 0 &&
         (by_off[0]->local_off < 4 || ReadU32Le(b.data()) != kLocalSig)) {
-        return std::to_string(by_off[0]->local_off) + " bytes of data before the first ZIP entry";
+        flags.Add(std::to_string(by_off[0]->local_off) + " bytes of data before the first ZIP entry");
     }
     for (size_t i = 1; i < by_off.size(); i++) {
         if (by_off[i - 1]->data_end > by_off[i]->local_off) {
-            return "ZIP entries \"" + by_off[i - 1]->name + "\" and \"" + by_off[i]->name +
-                   "\" overlap";
+            flags.Add("ZIP entries \"" + by_off[i - 1]->name + "\" and \"" + by_off[i]->name +
+                      "\" overlap");
+            break;
         }
     }
 
@@ -357,21 +475,29 @@ std::string ScanZipImpl(const std::vector<uint8_t>& b, Meta& meta) {
     std::vector<uint8_t> buf;
     for (const auto& e : entries) {
         if (e.name == "AndroidManifest.xml") manifest = &e;
+        if (e.name == "[Content_Types].xml") meta.is_ooxml = true;
         if (e.name == "classes.dex") dex = &e;
         std::string ext = LowerExtension(e.name);
         if (e.name.rfind("META-INF/", 0) == 0 && (ext == "rsa" || ext == "dsa" || ext == "ec")) {
             v1_cert = &e;
         }
-        if (!IsDataExtension(ext)) continue;
+        if (e.encrypted || !IsDataExtension(ext)) continue;
         if (!InflatePrefix(b.data() + e.data_off, e.comp, e.method, kMagicProbeBytes, buf)) continue;
         if (const char* kind = ExecutableMagic(buf)) {
-            return "ZIP entry \"" + e.name + "\" is named ." + ext + " but contains " + kind +
-                   " code";
+            flags.Add("ZIP entry \"" + e.name + "\" is named ." + ext + " but contains " + kind +
+                      " code");
         }
     }
 
-    if (!manifest) return "";
+    if (!manifest) {
+        if (meta.is_ooxml) {
+            std::string r = CheckOoxml(b, entries, meta);
+            if (!r.empty()) flags.Add(r);
+        }
+        return;
+    }
     meta.is_apk = true;
+    meta.is_ooxml = false;
 
     bool debug_signed = false;
     if (sig_block != SIZE_MAX) {
@@ -381,7 +507,10 @@ std::string ScanZipImpl(const std::vector<uint8_t>& b, Meta& meta) {
         bool has_v2 = false;
         while (pos + 12 <= pairs_end) {
             uint64_t len = ReadU64Le(b.data() + pos);
-            if (len < 4 || len > pairs_end - pos - 8) return "malformed APK Signing Block entry";
+            if (len < 4 || len > pairs_end - pos - 8) {
+                flags.Add("malformed APK Signing Block entry");
+                break;
+            }
             uint32_t id = ReadU32Le(b.data() + pos + 8);
             if (id == kApkSigV2) has_v2 = true;
             if (id == kApkSigV3 || id == kApkSigV31) has_v3 = true;
@@ -392,51 +521,50 @@ std::string ScanZipImpl(const std::vector<uint8_t>& b, Meta& meta) {
                                      sizeof(kDebugCertCn) - 1);
     } else if (v1_cert) {
         meta.signing = "v1";
-        if (InflatePrefix(b.data() + v1_cert->data_off, v1_cert->comp, v1_cert->method,
+        if (!v1_cert->encrypted &&
+            InflatePrefix(b.data() + v1_cert->data_off, v1_cert->comp, v1_cert->method,
                           std::min<size_t>(v1_cert->uncomp, kMaxCertBytes), buf)) {
             debug_signed = ContainsBytes(buf.data(), buf.size(), kDebugCertCn,
                                          sizeof(kDebugCertCn) - 1);
         }
     }
 
-    if (manifest->uncomp <= kMaxManifestBytes) {
+    if (!manifest->encrypted && manifest->uncomp <= kMaxManifestBytes) {
+        std::vector<std::string> strings;
         if (!InflatePrefix(b.data() + manifest->data_off, manifest->comp, manifest->method,
                            manifest->uncomp, buf) ||
             buf.size() != manifest->uncomp) {
-            return "AndroidManifest.xml could not be decompressed";
-        }
-        std::vector<std::string> strings;
-        if (!ParseAxmlStrings(buf, strings)) return "AndroidManifest.xml is not valid binary XML";
-        bool sms = false;
-        bool accessibility = false;
-        std::set<std::string> seen;
-        for (const auto& s : strings) {
-            if (s.find(".permission.") == std::string::npos || !seen.insert(s).second) continue;
-            meta.permission_strings++;
-            for (const char* perm : kHighRiskPermissions) {
-                if (s != perm) continue;
-                meta.high_risk_permissions++;
-                if (s.find("_SMS") != std::string::npos) sms = true;
-                if (s.find("ACCESSIBILITY") != std::string::npos) accessibility = true;
+            flags.Add("AndroidManifest.xml could not be decompressed");
+        } else if (!ParseAxmlStrings(buf, strings)) {
+            flags.Add("AndroidManifest.xml is not valid binary XML");
+        } else {
+            bool sms = false;
+            bool accessibility = false;
+            std::set<std::string> seen;
+            for (const auto& s : strings) {
+                if (s.find(".permission.") == std::string::npos || !seen.insert(s).second) continue;
+                meta.permission_strings++;
+                for (const char* perm : kHighRiskPermissions) {
+                    if (s != perm) continue;
+                    meta.high_risk_permissions++;
+                    if (s.find("_SMS") != std::string::npos) sms = true;
+                    if (s.find("ACCESSIBILITY") != std::string::npos) accessibility = true;
+                }
+            }
+            if (sms && accessibility) {
+                flags.Add("APK requests both SMS and accessibility-service permissions");
+            }
+            if (meta.high_risk_permissions >= kHighRiskFlagCount) {
+                flags.Add("APK requests " + std::to_string(meta.high_risk_permissions) +
+                          " high-risk permissions");
             }
         }
-        if (sms && accessibility) {
-            return "APK requests both SMS and accessibility-service permissions";
-        }
-        if (meta.high_risk_permissions >= kHighRiskFlagCount) {
-            return "APK requests " + std::to_string(meta.high_risk_permissions) +
-                   " high-risk permissions";
-        }
     }
 
-    if (dex) {
-        std::string dex_reason = CheckDex(b, *dex);
-        if (!dex_reason.empty()) return dex_reason;
-    }
+    if (dex && !dex->encrypted) CheckDex(b, *dex, meta, flags);
 
-    if (strcmp(meta.signing, "none") == 0) return "APK is unsigned";
-    if (debug_signed) return "APK is signed with the Android debug certificate";
-    return "";
+    if (strcmp(meta.signing, "none") == 0) flags.Add("APK is unsigned");
+    if (debug_signed) flags.Add("APK is signed with the Android debug certificate");
 }
 
 }  // namespace
@@ -446,18 +574,38 @@ bool LooksLikeZip(const std::vector<uint8_t>& file_bytes) {
            FindEocd(file_bytes) != SIZE_MAX;
 }
 
-CheapFilterResult ScanZip(const std::vector<uint8_t>& file_bytes, std::string& out_json) {
+CheapFilterResult ScanZip(const std::vector<uint8_t>& file_bytes, std::string& out_json,
+                          std::string* out_type) {
     Meta meta;
+    Flags flags;
+    ScanZipImpl(file_bytes, meta, flags);
     CheapFilterResult result;
-    result.reason = ScanZipImpl(file_bytes, meta);
-    result.flagged = !result.reason.empty();
+    result.flagged = flags.count > 0;
+    result.reason = flags.first;
 
-    out_json = std::string("{\"file_type\":\"") + (meta.is_apk ? "apk" : "zip") +
-               "\",\"zip_entries\":" + std::to_string(meta.entries);
+    const char* type = meta.is_apk ? "apk" : meta.is_ooxml ? "ooxml" : "zip";
+    if (out_type) *out_type = type;
+    out_json = std::string("{\"file_type\":\"") + type +
+               "\",\"zip_entries\":" + std::to_string(meta.entries) +
+               ",\"zip_encrypted_entries\":" + std::to_string(meta.encrypted_entries) +
+               ",\"zip_uncompressed_total\":" + std::to_string(meta.uncompressed_total) +
+               ",\"zip_flag_count\":" + std::to_string(flags.count);
     if (meta.is_apk) {
         out_json += std::string(",\"apk_signing\":\"") + meta.signing +
                     "\",\"permission_strings\":" + std::to_string(meta.permission_strings) +
                     ",\"high_risk_permissions\":" + std::to_string(meta.high_risk_permissions);
+        if (!meta.dex_version.empty()) out_json += ",\"dex_version\":\"" + meta.dex_version + "\"";
+        if (meta.dex_entropy >= 0) {
+            char buf[48];
+            snprintf(buf, sizeof(buf), ",\"dex_entropy\":%.3f", meta.dex_entropy);
+            out_json += buf;
+        }
+    }
+    if (meta.is_ooxml) {
+        out_json += std::string(",\"ooxml_macros\":") + (meta.ooxml_macros ? "true" : "false") +
+                    ",\"ooxml_activex\":" + std::to_string(meta.ooxml_activex) +
+                    ",\"ooxml_embeddings\":" + std::to_string(meta.ooxml_embeddings) +
+                    ",\"ooxml_external_rels\":" + std::to_string(meta.ooxml_external_rels);
     }
     out_json += "}";
     return result;

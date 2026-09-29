@@ -207,6 +207,7 @@ int ParseExif(const std::vector<uint8_t>& file_bytes, std::string& out_json) {
         }
 
         uint8_t marker = data[pos + 1];
+        if (marker == 0xDA || marker == 0xD9) break;
         uint16_t seg_len = ReadU16Be(data + pos + 2);
 
         if (marker == 0xE1 && pos + 4 + 6 <= size) {
