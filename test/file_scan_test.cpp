@@ -1,6 +1,8 @@
 #include "../exif_parser.h"
 #include "../file_scan.h"
 
+#include <zlib.h>
+
 #include <cassert>
 #include <cstdio>
 #include <fstream>
@@ -56,7 +58,31 @@ std::vector<uint8_t> StoredZip(const std::vector<std::string>& names) {
     return z;
 }
 
-std::vector<uint8_t> Png() { return Bytes(std::string("\x89PNG\r\n\x1A\n", 8) + "IHDR...."); }
+void PutBe32(std::vector<uint8_t>& v, uint32_t x) {
+    for (int i = 3; i >= 0; i--) v.push_back((x >> (8 * i)) & 0xFF);
+}
+
+void PngChunk(std::vector<uint8_t>& v, const std::string& type, const std::vector<uint8_t>& data) {
+    PutBe32(v, (uint32_t)data.size());
+    size_t start = v.size();
+    v.insert(v.end(), type.begin(), type.end());
+    v.insert(v.end(), data.begin(), data.end());
+    PutBe32(v, (uint32_t)crc32(0L, v.data() + start, (uInt)(v.size() - start)));
+}
+
+std::vector<uint8_t> Png() {
+    std::vector<uint8_t> v = {0x89, 'P', 'N', 'G', '\r', '\n', 0x1A, '\n'};
+    std::vector<uint8_t> ihdr;
+    PutBe32(ihdr, 8);
+    PutBe32(ihdr, 8);
+    for (uint8_t b : {8, 2, 0, 0, 0}) ihdr.push_back(b);
+    PngChunk(v, "IHDR", ihdr);
+    PngChunk(v, "IDAT", std::vector<uint8_t>(20, 0x55));
+    PngChunk(v, "IEND", {});
+    return v;
+}
+
+std::vector<uint8_t> BadPng() { return Bytes(std::string("\x89PNG\r\n\x1A\n", 8) + "IHDR...."); }
 
 noxos::FileScanOutput Scan(const std::vector<uint8_t>& b, const char* name = nullptr,
                            const char* mime = nullptr) {
@@ -92,7 +118,11 @@ int main() {
         auto r = Scan(jpeg);
         assert(r.status == 0 && r.json.rfind("{\"file_type\":\"jpeg\",\"", 0) == 0);
     }
-    assert(Clean(Scan(Png()), "{\"file_type\":\"png\"}"));
+    {
+        auto r = Scan(Png());
+        assert(r.status == 0 && r.json.rfind("{\"file_type\":\"png\",\"image_width\":", 0) == 0);
+        assert(Flagged(Scan(BadPng()), "no IEND"));
+    }
     assert(Clean(Scan(Bytes("just some plain text notes")), "{\"file_type\":\"unknown\"}"));
     assert(Flagged(Scan(Bytes("%PDF-1.7\n1 0 obj\n")), "no %%EOF"));
     {
@@ -139,7 +169,10 @@ int main() {
                empty_meta == Bytes("x"));
     }
 
-    assert(Clean(Scan(Png(), "cat.jpg", "image/jpeg"), "{\"file_type\":\"png\"}"));
+    {
+        auto r = Scan(Png(), "cat.jpg", "image/jpeg");
+        assert(r.status == 0 && r.json.find("cheap_filter_flagged") == std::string::npos);
+    }
     assert(Clean(Scan(PlainJpeg(), "IMG_0001.JPG", "image/jpeg; q=1"),
                  "{\"file_type\":\"jpeg\",\"exif\":\"none\"}"));
     assert(Flagged(Scan(StoredZip({"a.txt"}), "invoice.pdf", ""), "named .pdf but content is zip"));

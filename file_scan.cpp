@@ -3,6 +3,7 @@
 #include "exif_parser.h"
 #include "file_cheap_filter.h"
 #include "file_type.h"
+#include "image_scan.h"
 #include "json_util.h"
 #include "pdf_scan.h"
 #include "zip_scan.h"
@@ -63,6 +64,8 @@ FileScanOutput ScanFile(const std::vector<uint8_t>& b, const std::string* name,
         }
     } else if (type == "pdf") {
         cheap = ScanPdf(b, out.json);
+    } else if (type == "png" || type == "gif" || type == "webp") {
+        cheap = ScanImage(b, type, out.json);
     } else {
         cheap = CheckFileCheapFilter(b);
         out.json = TypeOnlyJson(type);

@@ -74,7 +74,9 @@ handle_connection(client_fd)
       │      ├─ PDF:  ScanPdf → pdfid-style keyword counts over raw + inflated
       │      │        streams, #xx-obfuscated names, header offset, %%EOF,
       │      │        trailing data, startxref bounds
-      │      ├─ everything else: signature list, packed ELF/PE
+      │      ├─ PNG/GIF/WebP: ScanImage → chunk/block walk, CRC (PNG), IEND/trailer, RIFF size,
+      │        data after the image, embedded foreign magic, pixel-count bomb
+      ├─ everything else: signature list, packed ELF/PE
       │      │        → clean = {"file_type":"<detected>"|"unknown"} (fail-open)
       │      ├─ task 2 only: CheckDeclaredType(name, mime, detected type)
       │      │        → bidi-override names, .jpg.apk-style double extensions,
@@ -216,8 +218,9 @@ Every parser that touches attacker-controlled bytes (EXIF, file cheap filter, ZI
 clang++ -std=c++17 -g -fsanitize=address,undefined -o exif_test exif_parser.cpp test/exif_parser_test.cpp && ./exif_test
 clang++ -std=c++17 -g -fsanitize=address,undefined -o file_cf_test file_cheap_filter.cpp test/file_cheap_filter_test.cpp && ./file_cf_test
 clang++ -std=c++17 -g -fsanitize=address,undefined -o zip_scan_test zip_scan.cpp test/zip_scan_test.cpp -lz && ./zip_scan_test
+clang++ -std=c++17 -g -fsanitize=address,undefined -o image_scan_test image_scan.cpp test/image_scan_test.cpp -lz && ./image_scan_test
 clang++ -std=c++17 -g -fsanitize=address,undefined -o pdf_scan_test pdf_scan.cpp test/pdf_scan_test.cpp -lz && ./pdf_scan_test
-clang++ -std=c++17 -g -fsanitize=address,undefined -o file_scan_test file_scan.cpp file_type.cpp zip_scan.cpp pdf_scan.cpp exif_parser.cpp file_cheap_filter.cpp test/file_scan_test.cpp -lz && ./file_scan_test
+clang++ -std=c++17 -g -fsanitize=address,undefined -o file_scan_test file_scan.cpp file_type.cpp zip_scan.cpp pdf_scan.cpp image_scan.cpp exif_parser.cpp file_cheap_filter.cpp test/file_scan_test.cpp -lz && ./file_scan_test
 ```
 
 Each has a matching libFuzzer harness under `fuzz/`:

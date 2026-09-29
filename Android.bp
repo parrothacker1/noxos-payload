@@ -54,6 +54,7 @@ cc_library_shared {
         "file_cheap_filter.cpp",
         "file_scan.cpp",
         "file_type.cpp",
+        "image_scan.cpp",
         "pdf_scan.cpp",
         "zip_scan.cpp",
     ],

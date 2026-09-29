@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <cstring>
 #include <string>
+#include <vector>
 
 namespace noxos {
 
@@ -42,6 +43,39 @@ inline const ByteSignature kKnownBadSignatures[] = {
 inline const char* FindKnownBadSignature(const uint8_t* p, size_t n) {
     for (const auto& sig : kKnownBadSignatures) {
         if (ContainsBytes(p, n, sig.bytes, sig.len)) return sig.name;
+    }
+    return nullptr;
+}
+
+struct ForeignMagic {
+    const char* bytes;
+    size_t len;
+    const char* name;
+    bool only_at_start;
+};
+
+inline const ForeignMagic kForeignMagics[] = {
+    {"PK\x03\x04", 4, "ZIP local file header", false},
+    {"\x1F\x8B\x08", 3, "gzip", false},
+    {"\x7F""ELF", 4, "ELF executable", false},
+    {"MZ", 2, "Windows PE/DOS executable", true},
+    {"%PDF-", 5, "PDF", false},
+    {"#!", 2, "shebang script", true},
+    {"<?php", 5, "PHP script", false},
+    {"<script", 7, "HTML script tag", false},
+    {"dex\n0", 5, "DEX file", false},
+    {"Rar!\x1A\x07", 6, "RAR archive", false},
+    {"7z\xBC\xAF\x27\x1C", 6, "7z archive", false},
+};
+
+inline const char* FindForeignMagic(const std::vector<uint8_t>& b, size_t start) {
+    for (size_t i = start; i < b.size(); i++) {
+        for (const auto& sig : kForeignMagics) {
+            if (sig.only_at_start && i != start) continue;
+            if (b.size() - i >= sig.len && memcmp(b.data() + i, sig.bytes, sig.len) == 0) {
+                return sig.name;
+            }
+        }
     }
     return nullptr;
 }
