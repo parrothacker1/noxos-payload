@@ -253,8 +253,31 @@ int main() {
         assert(!r.flagged);
         assert(j == "{\"file_type\":\"apk\",\"zip_entries\":2,\"zip_encrypted_entries\":0,"
                     "\"zip_uncompressed_total\":8404,\"zip_flag_count\":0,\"apk_signing\":\"v2\","
-                    "\"permission_strings\":1,\"high_risk_permissions\":0,\"dex_version\":\"035\","
+                    "\"permission_strings\":1,\"high_risk_permissions\":0,"
+                    "\"permissions\":[\"android.permission.INTERNET\"],\"dex_version\":\"035\","
                     "\"dex_entropy\":3.500}");
+    }
+    {
+        ApkOpts a;
+        a.perms = {"android.permission.INTERNET", "android.permission.INTERNET",
+                   "com.example.permission.CUSTOM", "not a permission", "x.permission.\"quote",
+                   "android.permission.CAMERA"};
+        std::string j;
+        Scan(BuildApk(a), &j);
+        assert(j.find("\"permissions\":[\"android.permission.INTERNET\","
+                      "\"com.example.permission.CUSTOM\",\"x.permission.\\\"quote\","
+                      "\"android.permission.CAMERA\"]") != std::string::npos);
+        assert(j.find("\"permission_strings\":4") != std::string::npos);
+    }
+    {
+        ApkOpts a;
+        a.perms.clear();
+        for (int i = 0; i < 2100; i++) a.perms.push_back("a.permission.P" + std::to_string(i));
+        std::string j;
+        Scan(BuildApk(a), &j);
+        assert(j.find("\"permission_strings\":2100") != std::string::npos);
+        assert(j.find("\"a.permission.P1999\"") != std::string::npos);
+        assert(j.find("\"a.permission.P2000\"") == std::string::npos);
     }
     {
         ApkOpts a;

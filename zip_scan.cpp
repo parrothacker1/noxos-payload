@@ -8,6 +8,7 @@
 #include <cstring>
 #include <set>
 
+#include "json_util.h"
 #include "scan_util.h"
 
 namespace noxos {
@@ -33,6 +34,8 @@ constexpr size_t kDexSampleBytes = 1024 * 1024;
 constexpr size_t kMinEntropySampleBytes = 4096;
 constexpr double kPackedDexEntropy = 7.2;
 constexpr size_t kMaxAxmlStrings = 100000;
+constexpr size_t kMaxReportedPermissions = 2000;
+constexpr size_t kMaxReportedPermissionLen = 256;
 constexpr size_t kMaxRelsBytes = 1024 * 1024;
 constexpr size_t kMaxRelsFiles = 256;
 
@@ -87,6 +90,7 @@ struct Meta {
     const char* signing = "none";
     size_t permission_strings = 0;
     size_t high_risk_permissions = 0;
+    std::vector<std::string> permissions;
     bool ooxml_macros = false;
     size_t ooxml_activex = 0;
     size_t ooxml_embeddings = 0;
@@ -126,6 +130,13 @@ bool InflatePrefix(const uint8_t* src, size_t src_len, uint16_t method, size_t m
     inflateEnd(&zs);
     out.resize(produced);
     return rc == Z_STREAM_END || ((rc == Z_OK || rc == Z_BUF_ERROR) && produced > 0);
+}
+
+bool IsPrintableAscii(const std::string& s) {
+    for (char c : s) {
+        if ((unsigned char)c < 0x20 || (unsigned char)c > 0x7E) return false;
+    }
+    return true;
 }
 
 bool IsPathTraversal(const std::string& name) {
@@ -544,6 +555,10 @@ void ScanZipImpl(const std::vector<uint8_t>& b, Meta& meta, Flags& flags) {
             for (const auto& s : strings) {
                 if (s.find(".permission.") == std::string::npos || !seen.insert(s).second) continue;
                 meta.permission_strings++;
+                if (meta.permissions.size() < kMaxReportedPermissions &&
+                    s.size() <= kMaxReportedPermissionLen && IsPrintableAscii(s)) {
+                    meta.permissions.push_back(s);
+                }
                 for (const char* perm : kHighRiskPermissions) {
                     if (s != perm) continue;
                     meta.high_risk_permissions++;
@@ -594,6 +609,12 @@ CheapFilterResult ScanZip(const std::vector<uint8_t>& file_bytes, std::string& o
         out_json += std::string(",\"apk_signing\":\"") + meta.signing +
                     "\",\"permission_strings\":" + std::to_string(meta.permission_strings) +
                     ",\"high_risk_permissions\":" + std::to_string(meta.high_risk_permissions);
+        out_json += ",\"permissions\":[";
+        for (size_t i = 0; i < meta.permissions.size(); i++) {
+            if (i > 0) out_json += ",";
+            out_json += "\"" + JsonEscape(meta.permissions[i]) + "\"";
+        }
+        out_json += "]";
         if (!meta.dex_version.empty()) out_json += ",\"dex_version\":\"" + meta.dex_version + "\"";
         if (meta.dex_entropy >= 0) {
             char buf[48];
