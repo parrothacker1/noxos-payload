@@ -5,6 +5,7 @@
 #include "file_type.h"
 #include "image_scan.h"
 #include "json_util.h"
+#include "ole2_scan.h"
 #include "pdf_scan.h"
 #include "zip_scan.h"
 
@@ -49,7 +50,9 @@ FileScanOutput ScanFile(const std::vector<uint8_t>& b, const std::string* name,
     std::string type = DetectFileType(b);
     bool is_jpeg = b.size() >= 2 && b[0] == 0xFF && b[1] == 0xD8;
 
-    if (!is_jpeg && LooksLikeZip(b)) {
+    bool own_scanner = is_jpeg || type == "png" || type == "gif" || type == "webp" || type == "pdf" ||
+                       type == "ole2";
+    if (!is_jpeg && (type == "zip" || (!own_scanner && EndsWithZip(b)))) {
         cheap = ScanZip(b, out.json, &type);
     } else if (is_jpeg) {
         type = "jpeg";
@@ -62,6 +65,8 @@ FileScanOutput ScanFile(const std::vector<uint8_t>& b, const std::string* name,
             out.status = kStatusOk;
             out.json = exif_absent ? "{\"file_type\":\"jpeg\",\"exif\":\"none\"}" : TypeOnlyJson(type);
         }
+    } else if (type == "ole2") {
+        cheap = ScanOle2(b, out.json);
     } else if (type == "pdf") {
         cheap = ScanPdf(b, out.json);
     } else if (type == "png" || type == "gif" || type == "webp") {

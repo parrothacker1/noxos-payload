@@ -589,6 +589,12 @@ bool LooksLikeZip(const std::vector<uint8_t>& file_bytes) {
            FindEocd(file_bytes) != SIZE_MAX;
 }
 
+bool EndsWithZip(const std::vector<uint8_t>& file_bytes) {
+    size_t eocd = FindEocd(file_bytes);
+    if (eocd == SIZE_MAX) return false;
+    return eocd + kEocdLen + ReadU16Le(file_bytes.data() + eocd + 20) == file_bytes.size();
+}
+
 CheapFilterResult ScanZip(const std::vector<uint8_t>& file_bytes, std::string& out_json,
                           std::string* out_type) {
     Meta meta;

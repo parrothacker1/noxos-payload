@@ -32,8 +32,9 @@ std::vector<uint8_t> PlainJpeg() {
     return j;
 }
 
-std::vector<uint8_t> StoredZip(const std::vector<std::string>& names) {
-    std::vector<uint8_t> z, cd;
+std::vector<uint8_t> StoredZip(const std::vector<std::string>& names,
+                               const std::vector<uint8_t>& prefix = {}) {
+    std::vector<uint8_t> z = prefix, cd;
     for (const auto& n : names) {
         uint32_t off = (uint32_t)z.size();
         Put32(z, 0x04034b50);
@@ -191,6 +192,23 @@ int main() {
                  "\"zip_uncompressed_total\":1,\"zip_flag_count\":0}"));
     assert(Clean(Scan(Bytes("\x7F" "ELFplain"), "libfoo.so", ""), "{\"file_type\":\"elf\"}"));
     assert(Clean(Scan(Bytes("notes"), ".hidden", ""), "{\"file_type\":\"unknown\"}"));
+
+    {
+        std::vector<uint8_t> ole = {0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1};
+        ole.resize(600, 0);
+        std::vector<uint8_t> z = StoredZip({"a.txt"});
+        std::vector<uint8_t> embedded = ole;
+        embedded.insert(embedded.end(), z.begin(), z.end());
+        embedded.insert(embedded.end(), 300, 0);
+        auto r = Scan(embedded);
+        assert(r.json.find("\"file_type\":\"ole2\"") != std::string::npos);
+        assert(r.json.find("appended data after ZIP end record") == std::string::npos);
+
+        std::vector<uint8_t> dex_prefix = {'d', 'e', 'x', '\n', '0', '3', '5', 0};
+        dex_prefix.resize(100, 0);
+        dex_prefix = StoredZip({"a.txt"}, dex_prefix);
+        assert(Flagged(Scan(dex_prefix), "before the first ZIP entry"));
+    }
 
     printf("ok: file_scan_test passed\n");
     return 0;
