@@ -101,6 +101,25 @@ int main() {
         assert(!Scan(Pdf(catalog + body)).flagged);
     }
     {
+        std::string binary = "garbage /JS<binary /AA\r more /JavaScript\n /OpenAction ";
+        std::string body = "1 0 obj\n<< /Type /Catalog /OpenAction [3 0 R /Fit] >>\nendobj\n"
+                           "4 0 obj\n<< /Filter /FlateDecode /Length 99 >>\nstream\n" + Zlib(binary) +
+                           "\nendstream\nendobj\n";
+        std::string j;
+        auto r = Scan(Pdf(body), &j);
+        if (r.flagged) fprintf(stderr, "%s\n", r.reason.c_str());
+        assert(!r.flagged);
+        assert(j.find("\"pdf_inflated_streams\":0") != std::string::npos);
+        assert(j.find("\"pdf_js\":0") != std::string::npos && j.find("\"pdf_aa\":0") != std::string::npos);
+    }
+    {
+        std::string hidden = "5 0 << /S /JavaScript /JS (x) >>";
+        std::string body = "1 0 obj\n<< /AA << /O 5 0 R >> >>\nendobj\n"
+                           "4 0 obj\n<< /Type /Obj#53tm /Filter /FlateDecode >>\nstream\n" + Zlib(hidden) +
+                           "\nendstream\nendobj\n";
+        assert(Has(Scan(Pdf(body)), "hex-obfuscated PDF name /ObjStm"));
+    }
+    {
         std::string body = "1 0 obj\n<< /Length 5 >>\nstream\n\x78\x9C\xFF\xFF\xFF\nendstream\nendobj\n";
         assert(!Scan(Pdf(body)).flagged);
         Scan("%PDF-1.4\n1 0 obj\nstream\n");

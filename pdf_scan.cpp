@@ -18,6 +18,7 @@ constexpr size_t kMaxStreamOutput = 1024 * 1024;
 constexpr size_t kMaxTotalInflated = 16 * 1024 * 1024;
 constexpr size_t kMaxStreams = 4096;
 constexpr size_t kMaxNameLen = 127;
+constexpr size_t kDictWindow = 1024;
 
 enum Keyword {
     kJs, kJavaScript, kOpenAction, kAa, kLaunch, kEmbeddedFile, kRichMedia, kXfa,
@@ -107,6 +108,18 @@ void InflateStreams(const std::vector<uint8_t>& b, Counts& c) {
         if (c.inflated_bytes >= kMaxTotalInflated || !LooksLikeZlib(b.data() + start, end - start)) {
             continue;
         }
+        size_t dict_start = kw > kDictWindow ? kw - kDictWindow : 0;
+        const void* last_endobj = nullptr;
+        for (size_t q = dict_start; q + 6 <= kw;) {
+            const void* h = memmem(b.data() + q, kw - q, "endobj", 6);
+            if (!h) break;
+            last_endobj = h;
+            q = (size_t)((const uint8_t*)h - b.data()) + 6;
+        }
+        if (last_endobj) dict_start = (size_t)((const uint8_t*)last_endobj - b.data()) + 6;
+        Counts dict;
+        CountNames(b.data() + dict_start, kw - dict_start, dict);
+        if (dict.keywords[kObjStm] == 0) continue;
 
         if (out.empty()) out.resize(kMaxStreamOutput);
         z_stream zs = {};

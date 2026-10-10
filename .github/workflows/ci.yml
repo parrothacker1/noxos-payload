@@ -23,6 +23,10 @@ jobs:
         run: clang++ -std=c++17 -g -fsanitize=address,undefined -o zip_scan_test zip_scan.cpp test/zip_scan_test.cpp -lz
       - name: Run ZIP/APK scanner self-check
         run: ./zip_scan_test
+      - name: Build signature self-detection check
+        run: clang++ -std=c++17 -O2 -o self_signature_test test/self_signature_test.cpp
+      - name: Run signature self-detection check
+        run: ./self_signature_test
       - name: Build PDF scanner self-check
         run: clang++ -std=c++17 -g -fsanitize=address,undefined -o pdf_scan_test pdf_scan.cpp test/pdf_scan_test.cpp -lz
       - name: Run PDF scanner self-check
