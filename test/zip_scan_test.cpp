@@ -108,7 +108,8 @@ std::vector<uint8_t> SigBlock(uint32_t id, const std::string& value) {
     return b;
 }
 
-std::vector<uint8_t> Axml(const std::vector<std::string>& strings) {
+std::vector<uint8_t> Axml(const std::vector<std::string>& strings,
+                          const std::vector<uint8_t>& extra = std::vector<uint8_t>()) {
     std::vector<uint8_t> offsets, data;
     for (const auto& s : strings) {
         Put32(offsets, (uint32_t)data.size());
@@ -125,9 +126,66 @@ std::vector<uint8_t> Axml(const std::vector<std::string>& strings) {
     pool.insert(pool.end(), offsets.begin(), offsets.end());
     pool.insert(pool.end(), data.begin(), data.end());
     std::vector<uint8_t> x;
-    Put16(x, 0x0003); Put16(x, 8); Put32(x, (uint32_t)(8 + pool.size()));
+    Put16(x, 0x0003); Put16(x, 8); Put32(x, (uint32_t)(8 + pool.size() + extra.size()));
     x.insert(x.end(), pool.begin(), pool.end());
+    x.insert(x.end(), extra.begin(), extra.end());
     return x;
+}
+
+struct AxmlAttr {
+    uint32_t name_idx;
+    uint8_t type;
+    uint32_t data;
+};
+
+std::vector<uint8_t> ResMap(const std::vector<uint32_t>& ids) {
+    std::vector<uint8_t> c;
+    Put16(c, 0x0180); Put16(c, 8); Put32(c, (uint32_t)(8 + 4 * ids.size()));
+    for (uint32_t id : ids) Put32(c, id);
+    return c;
+}
+
+std::vector<uint8_t> StartElement(uint32_t name_idx, const std::vector<AxmlAttr>& attrs) {
+    std::vector<uint8_t> c;
+    Put16(c, 0x0102); Put16(c, 16); Put32(c, (uint32_t)(36 + 20 * attrs.size()));
+    Put32(c, 1); Put32(c, 0xFFFFFFFF);
+    Put32(c, 0xFFFFFFFF); Put32(c, name_idx);
+    Put16(c, 20); Put16(c, 20); Put16(c, (uint16_t)attrs.size());
+    Put16(c, 0); Put16(c, 0); Put16(c, 0);
+    for (const auto& a : attrs) {
+        Put32(c, 0xFFFFFFFF); Put32(c, a.name_idx); Put32(c, 0xFFFFFFFF);
+        Put16(c, 8); c.push_back(0); c.push_back(a.type); Put32(c, a.data);
+    }
+    return c;
+}
+
+std::vector<std::string> ManifestStrings() {
+    return {"manifest", "uses-sdk", "application", "targetSdkVersion", "minSdkVersion",
+            "sharedUserId", "debuggable", "android.permission.INTERNET", "android.uid.system",
+            "com.example.shared"};
+}
+
+std::vector<uint8_t> Manifest(int target, int min, int shared_str, bool debuggable, bool res_map,
+                              const std::vector<std::string>& strings = ManifestStrings()) {
+    std::vector<uint8_t> nodes;
+    if (res_map) {
+        auto m = ResMap({0, 0, 0, 0x01010270, 0x0101020C, 0x0101000B, 0x0101000F, 0, 0, 0, 0, 0});
+        nodes.insert(nodes.end(), m.begin(), m.end());
+    }
+    std::vector<AxmlAttr> man;
+    if (shared_str >= 0) man.push_back({5, 3, (uint32_t)shared_str});
+    auto e0 = StartElement(0, man);
+    std::vector<AxmlAttr> sdk;
+    if (min >= 0) sdk.push_back({4, 0x10, (uint32_t)min});
+    if (target >= 0) sdk.push_back({3, 0x10, (uint32_t)target});
+    auto e1 = StartElement(1, sdk);
+    std::vector<AxmlAttr> app;
+    if (debuggable) app.push_back({6, 0x12, 0xFFFFFFFF});
+    auto e2 = StartElement(2, app);
+    nodes.insert(nodes.end(), e0.begin(), e0.end());
+    nodes.insert(nodes.end(), e1.begin(), e1.end());
+    nodes.insert(nodes.end(), e2.begin(), e2.end());
+    return Axml(strings, nodes);
 }
 
 std::vector<uint8_t> Dex(size_t body_len, bool random_body) {
@@ -152,11 +210,12 @@ struct ApkOpts {
     bool signed_v2 = true;
     std::string cert = "CN=Example Corp";
     std::vector<TestEntry> extra;
+    std::vector<uint8_t> manifest;
 };
 
 std::vector<uint8_t> BuildApk(const ApkOpts& a) {
     std::vector<TestEntry> es;
-    es.push_back({"AndroidManifest.xml", Axml(a.perms), true});
+    es.push_back({"AndroidManifest.xml", a.manifest.empty() ? Axml(a.perms) : a.manifest, true});
     es.push_back({"classes.dex", a.dex, true});
     for (const auto& e : a.extra) es.push_back(e);
     ZipOpts o;
@@ -254,7 +313,9 @@ int main() {
         assert(j == "{\"file_type\":\"apk\",\"zip_entries\":2,\"zip_encrypted_entries\":0,"
                     "\"zip_uncompressed_total\":8404,\"zip_flag_count\":0,\"apk_signing\":\"v2\","
                     "\"permission_strings\":1,\"high_risk_permissions\":0,"
-                    "\"permissions\":[\"android.permission.INTERNET\"],\"dex_version\":\"035\","
+                    "\"permissions\":[\"android.permission.INTERNET\"],\"dex_count\":1,"
+                    "\"apk_shared_user_id\":false,\"apk_shared_user_id_privileged\":false,"
+                    "\"apk_debuggable\":false,\"dex_version\":\"035\","
                     "\"dex_entropy\":3.500}");
     }
     {
@@ -382,6 +443,70 @@ int main() {
         apk_like.push_back({"AndroidManifest.xml", Bytes("<manifest/>"), true});
         assert(Has(Scan(BuildZip(apk_like), &j), "not valid binary XML"));
         assert(j.find("\"file_type\":\"apk\"") != std::string::npos);
+    }
+
+    {
+        ApkOpts a;
+        a.manifest = Manifest(34, 21, 8, true, true);
+        std::string j;
+        auto r = Scan(BuildApk(a), &j);
+        assert(Has(r, "privileged android.uid.* shared user ID"));
+        assert(j.find("\"apk_target_sdk\":34,\"apk_min_sdk\":21") != std::string::npos);
+        assert(j.find("\"apk_shared_user_id\":true,\"apk_shared_user_id_privileged\":true,"
+                      "\"apk_debuggable\":true") != std::string::npos);
+        a.manifest = Manifest(34, 21, 9, false, true);
+        r = Scan(BuildApk(a), &j);
+        if (r.flagged) fprintf(stderr, "%s\n", r.reason.c_str());
+        assert(!r.flagged);
+        assert(j.find("\"apk_shared_user_id\":true,\"apk_shared_user_id_privileged\":false,"
+                      "\"apk_debuggable\":false") != std::string::npos);
+        a.manifest = Manifest(34, 21, -1, false, false);
+        r = Scan(BuildApk(a), &j);
+        assert(!r.flagged);
+        assert(j.find("\"apk_target_sdk\":34,\"apk_min_sdk\":21,\"apk_shared_user_id\":false") !=
+               std::string::npos);
+        a.manifest = Manifest(-1, -1, -1, false, true);
+        r = Scan(BuildApk(a), &j);
+        assert(!r.flagged);
+        assert(j.find("apk_target_sdk") == std::string::npos);
+    }
+    {
+        auto risky = ManifestStrings();
+        risky.push_back("android.permission.CALL_PHONE");
+        risky.push_back("android.permission.RECORD_AUDIO");
+        ApkOpts a;
+        a.manifest = Manifest(22, 16, -1, false, true, risky);
+        assert(Has(Scan(BuildApk(a)), "targets SDK 22 (below 23)"));
+        a.manifest = Manifest(34, 16, -1, false, true, risky);
+        assert(!Scan(BuildApk(a)).flagged);
+        a.manifest = Manifest(22, 16, -1, false, true);
+        assert(!Scan(BuildApk(a)).flagged);
+    }
+    {
+        ApkOpts a;
+        a.extra.push_back({"classes2.dex", Dex(8192, false), true});
+        a.extra.push_back({"classes10.dex", Dex(4096, false), true});
+        std::string j;
+        auto r = Scan(BuildApk(a), &j);
+        if (r.flagged) fprintf(stderr, "%s\n", r.reason.c_str());
+        assert(!r.flagged);
+        assert(j.find("\"dex_count\":3") != std::string::npos);
+        ApkOpts bad;
+        auto d = Dex(8192, false);
+        d[0] = 'x';
+        bad.extra.push_back({"classes2.dex", d, true});
+        assert(Has(Scan(BuildApk(bad)), "classes2.dex has no valid DEX magic"));
+        ApkOpts packed;
+        packed.extra.push_back({"classes3.dex", Dex(8192, true), true});
+        assert(Has(Scan(BuildApk(packed)), "classes3.dex entropy"));
+        ApkOpts hidden;
+        auto d2 = Dex(8192, false);
+        d2[0] = 'x';
+        hidden.extra.push_back({"assets/classes2.dex", d2, true});
+        hidden.extra.push_back({"classesX.dex", d2, true});
+        hidden.extra.push_back({"classes.dex.bak", d2, true});
+        assert(!Scan(BuildApk(hidden), &j).flagged);
+        assert(j.find("\"dex_count\":1") != std::string::npos);
     }
 
     printf("zip_scan_test: all passed\n");

@@ -34,6 +34,8 @@ constexpr size_t kDexSampleBytes = 1024 * 1024;
 constexpr size_t kMinEntropySampleBytes = 4096;
 constexpr double kPackedDexEntropy = 7.2;
 constexpr size_t kMaxAxmlStrings = 100000;
+constexpr size_t kMaxDexFiles = 100;
+constexpr uint32_t kLegacyTargetSdk = 23;
 constexpr size_t kMaxReportedPermissions = 2000;
 constexpr size_t kMaxReportedPermissionLen = 256;
 constexpr size_t kMaxRelsBytes = 1024 * 1024;
@@ -99,6 +101,14 @@ struct Meta {
     uint64_t uncompressed_total = 0;
     std::string dex_version;
     double dex_entropy = -1.0;
+    size_t dex_count = 0;
+    bool has_target_sdk = false;
+    uint32_t target_sdk = 0;
+    bool has_min_sdk = false;
+    uint32_t min_sdk = 0;
+    bool shared_user_id = false;
+    bool shared_user_id_privileged = false;
+    bool debuggable = false;
 };
 
 struct Flags {
@@ -130,6 +140,15 @@ bool InflatePrefix(const uint8_t* src, size_t src_len, uint16_t method, size_t m
     inflateEnd(&zs);
     out.resize(produced);
     return rc == Z_STREAM_END || ((rc == Z_OK || rc == Z_BUF_ERROR) && produced > 0);
+}
+
+bool IsClassesDex(const std::string& n) {
+    if (n.size() < 11 || n.compare(0, 7, "classes") != 0) return false;
+    if (n.compare(n.size() - 4, 4, ".dex") != 0) return false;
+    for (size_t i = 7; i + 4 < n.size(); i++) {
+        if (n[i] < '0' || n[i] > '9') return false;
+    }
+    return true;
 }
 
 bool IsPrintableAscii(const std::string& s) {
@@ -232,6 +251,86 @@ bool ParseAxmlStrings(const std::vector<uint8_t>& x, std::vector<std::string>& o
     return true;
 }
 
+struct AxmlAttrIds {
+    static constexpr uint32_t kShared = 0x0101000B;
+    static constexpr uint32_t kDebuggable = 0x0101000F;
+    static constexpr uint32_t kMinSdk = 0x0101020C;
+    static constexpr uint32_t kTargetSdk = 0x01010270;
+};
+
+bool AttrIs(const std::vector<std::string>& strings, const std::vector<uint32_t>& res_ids,
+            uint32_t name_idx, uint32_t id, const char* name) {
+    if (name_idx < res_ids.size() && res_ids[name_idx] == id) return true;
+    return name_idx < strings.size() && strings[name_idx] == name;
+}
+
+uint32_t AttrInt(const std::vector<std::string>& strings, uint8_t type, uint32_t data) {
+    if (type == 0x10 || type == 0x11) return data;
+    if (type == 0x03 && data < strings.size()) {
+        uint64_t v = 0;
+        for (char c : strings[data]) {
+            if (c < '0' || c > '9') return 0;
+            v = v * 10 + (uint64_t)(c - '0');
+            if (v > 0xFFFFFFFF) return 0;
+        }
+        return (uint32_t)v;
+    }
+    return 0;
+}
+
+void ParseManifestAttrs(const std::vector<uint8_t>& x, const std::vector<std::string>& strings,
+                        Meta& meta) {
+    size_t sp = ReadU16Le(x.data() + 2);
+    size_t pos = sp + ReadU32Le(x.data() + sp + 4);
+    std::vector<uint32_t> res_ids;
+    while (x.size() >= 8 && pos <= x.size() - 8) {
+        uint16_t type = ReadU16Le(x.data() + pos);
+        size_t size = ReadU32Le(x.data() + pos + 4);
+        if (size < 8 || size > x.size() - pos) return;
+        const uint8_t* e = x.data() + pos;
+        if (type == 0x0180) {
+            size_t n = std::min<size_t>((size - 8) / 4, kMaxAxmlStrings);
+            for (size_t i = 0; i < n; i++) res_ids.push_back(ReadU32Le(e + 8 + 4 * i));
+        } else if (type == 0x0102 && size >= 36) {
+            uint32_t elem_idx = ReadU32Le(e + 20);
+            size_t attr_start = ReadU16Le(e + 24);
+            size_t attr_size = ReadU16Le(e + 26);
+            size_t attr_count = ReadU16Le(e + 28);
+            if (elem_idx < strings.size() && attr_size >= 20 && 16 + attr_start <= size &&
+                attr_count <= (size - 16 - attr_start) / attr_size) {
+                const std::string& elem = strings[elem_idx];
+                for (size_t i = 0; i < attr_count; i++) {
+                    const uint8_t* a = e + 16 + attr_start + i * attr_size;
+                    uint32_t name_idx = ReadU32Le(a + 4);
+                    uint32_t raw = ReadU32Le(a + 8);
+                    uint8_t vtype = a[15];
+                    uint32_t data = ReadU32Le(a + 16);
+                    if (elem == "manifest" &&
+                        AttrIs(strings, res_ids, name_idx, AxmlAttrIds::kShared, "sharedUserId")) {
+                        meta.shared_user_id = true;
+                        uint32_t sidx = vtype == 0x03 ? data : raw;
+                        if (sidx < strings.size() && strings[sidx].rfind("android.uid.", 0) == 0) {
+                            meta.shared_user_id_privileged = true;
+                        }
+                    } else if (elem == "uses-sdk") {
+                        if (AttrIs(strings, res_ids, name_idx, AxmlAttrIds::kTargetSdk, "targetSdkVersion")) {
+                            meta.has_target_sdk = true;
+                            meta.target_sdk = AttrInt(strings, vtype, data);
+                        } else if (AttrIs(strings, res_ids, name_idx, AxmlAttrIds::kMinSdk, "minSdkVersion")) {
+                            meta.has_min_sdk = true;
+                            meta.min_sdk = AttrInt(strings, vtype, data);
+                        }
+                    } else if (elem == "application" &&
+                               AttrIs(strings, res_ids, name_idx, AxmlAttrIds::kDebuggable, "debuggable")) {
+                        meta.debuggable = vtype == 0x12 && data != 0;
+                    }
+                }
+            }
+        }
+        pos += size;
+    }
+}
+
 std::string XmlAttr(const std::string& tag, const char* attr) {
     std::string key = std::string(" ") + attr + "=";
     size_t k = tag.find(key);
@@ -294,44 +393,43 @@ void CheckDex(const std::vector<uint8_t>& b, const Entry& e, Meta& meta, Flags& 
     std::vector<uint8_t> dex;
     if (!InflatePrefix(b.data() + e.data_off, e.comp, e.method,
                        std::min<size_t>(e.uncomp, kDexHeaderLen + kDexSampleBytes), dex)) {
-        flags.Add("classes.dex could not be decompressed");
+        flags.Add(e.name + " could not be decompressed");
         return;
     }
     if (dex.size() < kDexHeaderLen) {
-        flags.Add("classes.dex is shorter than a DEX header");
+        flags.Add(e.name + " is shorter than a DEX header");
         return;
     }
     const uint8_t* h = dex.data();
     if (memcmp(h, "dex\n", 4) != 0 || h[7] != 0 || !isdigit(h[4]) || !isdigit(h[5]) ||
         !isdigit(h[6])) {
-        flags.Add("classes.dex has no valid DEX magic");
+        flags.Add(e.name + " has no valid DEX magic");
     } else {
-        meta.dex_version.assign(reinterpret_cast<const char*>(h + 4), 3);
+        if (meta.dex_version.empty()) meta.dex_version.assign(reinterpret_cast<const char*>(h + 4), 3);
     }
-    if (ReadU32Le(h + 0x28) != 0x12345678) flags.Add("classes.dex has a non-standard endian tag");
-    if (ReadU32Le(h + 0x24) != kDexHeaderLen) flags.Add("classes.dex header_size is not 0x70");
+    if (ReadU32Le(h + 0x28) != 0x12345678) flags.Add(e.name + " has a non-standard endian tag");
+    if (ReadU32Le(h + 0x24) != kDexHeaderLen) flags.Add(e.name + " header_size is not 0x70");
     uint32_t file_size = ReadU32Le(h + 0x20);
     if (file_size != e.uncomp) {
-        flags.Add("classes.dex header declares " + std::to_string(file_size) +
+        flags.Add(e.name + " header declares " + std::to_string(file_size) +
                   " bytes but the entry is " + std::to_string(e.uncomp));
     }
     uint32_t map_off = ReadU32Le(h + 0x34);
-    if (map_off == 0 || map_off >= file_size) flags.Add("classes.dex map_off is out of bounds");
+    if (map_off == 0 || map_off >= file_size) flags.Add(e.name + " map_off is out of bounds");
     uint64_t data_end = (uint64_t)ReadU32Le(h + 0x6C) + ReadU32Le(h + 0x68);
-    if (data_end > file_size) flags.Add("classes.dex data section runs past end of file");
+    if (data_end > file_size) flags.Add(e.name + " data section runs past end of file");
 
     if (const char* sig = FindKnownBadSignature(dex.data(), dex.size())) {
-        flags.Add(std::string("classes.dex contains ") + sig);
+        flags.Add(e.name + " contains " + sig);
     }
     size_t body = dex.size() - kDexHeaderLen;
     if (body >= kMinEntropySampleBytes) {
-        meta.dex_entropy = ShannonEntropy(dex.data() + kDexHeaderLen, body);
-        if (meta.dex_entropy > kPackedDexEntropy) {
-            char buf[96];
-            snprintf(buf, sizeof(buf),
-                     "classes.dex entropy %.2f bits/byte suggests packed or encrypted code",
-                     meta.dex_entropy);
-            flags.Add(buf);
+        double entropy = ShannonEntropy(dex.data() + kDexHeaderLen, body);
+        meta.dex_entropy = std::max(meta.dex_entropy, entropy);
+        if (entropy > kPackedDexEntropy) {
+            char buf[160];
+            snprintf(buf, sizeof(buf), " entropy %.2f bits/byte suggests packed or encrypted code", entropy);
+            flags.Add(e.name + buf);
         }
     }
 }
@@ -481,13 +579,13 @@ void ScanZipImpl(const std::vector<uint8_t>& b, Meta& meta, Flags& flags) {
     }
 
     const Entry* manifest = nullptr;
-    const Entry* dex = nullptr;
+    std::vector<const Entry*> dexes;
     const Entry* v1_cert = nullptr;
     std::vector<uint8_t> buf;
     for (const auto& e : entries) {
         if (e.name == "AndroidManifest.xml") manifest = &e;
         if (e.name == "[Content_Types].xml") meta.is_ooxml = true;
-        if (e.name == "classes.dex") dex = &e;
+        if (IsClassesDex(e.name) && dexes.size() < kMaxDexFiles) dexes.push_back(&e);
         std::string ext = LowerExtension(e.name);
         if (e.name.rfind("META-INF/", 0) == 0 && (ext == "rsa" || ext == "dsa" || ext == "ec")) {
             v1_cert = &e;
@@ -549,6 +647,7 @@ void ScanZipImpl(const std::vector<uint8_t>& b, Meta& meta, Flags& flags) {
         } else if (!ParseAxmlStrings(buf, strings)) {
             flags.Add("AndroidManifest.xml is not valid binary XML");
         } else {
+            ParseManifestAttrs(buf, strings, meta);
             bool sms = false;
             bool accessibility = false;
             std::set<std::string> seen;
@@ -573,10 +672,21 @@ void ScanZipImpl(const std::vector<uint8_t>& b, Meta& meta, Flags& flags) {
                 flags.Add("APK requests " + std::to_string(meta.high_risk_permissions) +
                           " high-risk permissions");
             }
+            if (meta.shared_user_id_privileged) flags.Add("APK requests a privileged android.uid.* shared user ID");
+            if (meta.has_target_sdk && meta.target_sdk > 0 && meta.target_sdk < kLegacyTargetSdk &&
+                meta.high_risk_permissions >= 2) {
+                flags.Add("APK targets SDK " + std::to_string(meta.target_sdk) + " (below 23) and requests " +
+                          std::to_string(meta.high_risk_permissions) +
+                          " high-risk permissions, bypassing runtime permission prompts");
+            }
         }
     }
 
-    if (dex && !dex->encrypted) CheckDex(b, *dex, meta, flags);
+    for (const Entry* dex : dexes) {
+        if (dex->encrypted) continue;
+        meta.dex_count++;
+        CheckDex(b, *dex, meta, flags);
+    }
 
     if (strcmp(meta.signing, "none") == 0) flags.Add("APK is unsigned");
     if (debug_signed) flags.Add("APK is signed with the Android debug certificate");
@@ -621,6 +731,12 @@ CheapFilterResult ScanZip(const std::vector<uint8_t>& file_bytes, std::string& o
             out_json += "\"" + JsonEscape(meta.permissions[i]) + "\"";
         }
         out_json += "]";
+        out_json += ",\"dex_count\":" + std::to_string(meta.dex_count);
+        if (meta.has_target_sdk) out_json += ",\"apk_target_sdk\":" + std::to_string(meta.target_sdk);
+        if (meta.has_min_sdk) out_json += ",\"apk_min_sdk\":" + std::to_string(meta.min_sdk);
+        out_json += std::string(",\"apk_shared_user_id\":") + (meta.shared_user_id ? "true" : "false") +
+                    ",\"apk_shared_user_id_privileged\":" + (meta.shared_user_id_privileged ? "true" : "false") +
+                    ",\"apk_debuggable\":" + (meta.debuggable ? "true" : "false");
         if (!meta.dex_version.empty()) out_json += ",\"dex_version\":\"" + meta.dex_version + "\"";
         if (meta.dex_entropy >= 0) {
             char buf[48];
