@@ -1,5 +1,6 @@
 #include "file_scan.h"
 
+#include "archive_scan.h"
 #include "exif_parser.h"
 #include "file_cheap_filter.h"
 #include "file_type.h"
@@ -51,7 +52,7 @@ FileScanOutput ScanFile(const std::vector<uint8_t>& b, const std::string* name,
     bool is_jpeg = b.size() >= 2 && b[0] == 0xFF && b[1] == 0xD8;
 
     bool own_scanner = is_jpeg || type == "png" || type == "gif" || type == "webp" || type == "pdf" ||
-                       type == "ole2";
+                       type == "ole2" || type == "gzip" || type == "tar" || type == "7z" || type == "rar";
     if (!is_jpeg && (type == "zip" || (!own_scanner && EndsWithZip(b)))) {
         cheap = ScanZip(b, out.json, &type);
     } else if (is_jpeg) {
@@ -65,6 +66,8 @@ FileScanOutput ScanFile(const std::vector<uint8_t>& b, const std::string* name,
             out.status = kStatusOk;
             out.json = exif_absent ? "{\"file_type\":\"jpeg\",\"exif\":\"none\"}" : TypeOnlyJson(type);
         }
+    } else if (type == "gzip" || type == "tar" || type == "7z" || type == "rar") {
+        cheap = ScanArchive(b, type, out.json);
     } else if (type == "ole2") {
         cheap = ScanOle2(b, out.json);
     } else if (type == "pdf") {

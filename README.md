@@ -221,7 +221,7 @@ clang++ -std=c++17 -g -fsanitize=address,undefined -o zip_scan_test zip_scan.cpp
 clang++ -std=c++17 -g -fsanitize=address,undefined -o image_scan_test image_scan.cpp test/image_scan_test.cpp -lz && ./image_scan_test
 clang++ -std=c++17 -O2 -o self_signature_test test/self_signature_test.cpp && ./self_signature_test
 clang++ -std=c++17 -g -fsanitize=address,undefined -o pdf_scan_test pdf_scan.cpp test/pdf_scan_test.cpp -lz && ./pdf_scan_test
-clang++ -std=c++17 -g -fsanitize=address,undefined -o file_scan_test file_scan.cpp file_type.cpp zip_scan.cpp pdf_scan.cpp image_scan.cpp ole2_scan.cpp exif_parser.cpp file_cheap_filter.cpp test/file_scan_test.cpp -lz && ./file_scan_test
+clang++ -std=c++17 -g -fsanitize=address,undefined -o file_scan_test file_scan.cpp file_type.cpp zip_scan.cpp pdf_scan.cpp image_scan.cpp ole2_scan.cpp archive_scan.cpp exif_parser.cpp file_cheap_filter.cpp test/file_scan_test.cpp -lz && ./file_scan_test
 ```
 
 Each has a matching libFuzzer harness under `fuzz/`:
