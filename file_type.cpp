@@ -1,6 +1,7 @@
 #include "file_type.h"
 
 #include "archive_scan.h"
+#include "text_scan.h"
 
 #include <cctype>
 #include <cstring>
@@ -177,6 +178,9 @@ const char* DetectFileType(const std::vector<uint8_t>& b) {
         return "mp3";
     }
     if (LooksLikeTar(b.data(), b.size())) return "tar";
+    if (LooksLikeSvg(b)) return "svg";
+    if (LooksLikeHtml(b)) return "html";
+    if (StartsWith(b, 0, "#!", 2)) return "script";
     size_t window = b.size() < kPdfHeaderWindow ? b.size() : kPdfHeaderWindow;
     if (window >= 5 && memmem(b.data(), window, "%PDF-", 5) != nullptr) return "pdf";
     return "unknown";

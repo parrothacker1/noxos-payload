@@ -58,6 +58,7 @@ cc_library_shared {
         "image_scan.cpp",
         "ole2_scan.cpp",
         "pdf_scan.cpp",
+        "text_scan.cpp",
         "zip_scan.cpp",
     ],
     shared_libs: [

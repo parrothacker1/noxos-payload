@@ -36,15 +36,19 @@ jobs:
       - name: Run OLE2 scanner self-check
         run: ./ole2_scan_test
       - name: Build archive scanner self-check
-        run: clang++ -std=c++17 -g -fsanitize=address,undefined -o archive_scan_test archive_scan.cpp file_type.cpp test/archive_scan_test.cpp -lz
+        run: clang++ -std=c++17 -g -fsanitize=address,undefined -o archive_scan_test archive_scan.cpp file_type.cpp text_scan.cpp test/archive_scan_test.cpp -lz
       - name: Run archive scanner self-check
         run: ./archive_scan_test
+      - name: Build text scanner self-check
+        run: clang++ -std=c++17 -g -fsanitize=address,undefined -o text_scan_test text_scan.cpp test/text_scan_test.cpp
+      - name: Run text scanner self-check
+        run: ./text_scan_test
       - name: Build image scanner self-check
         run: clang++ -std=c++17 -g -fsanitize=address,undefined -o image_scan_test image_scan.cpp test/image_scan_test.cpp -lz
       - name: Run image scanner self-check
         run: ./image_scan_test
       - name: Build file scan pipeline self-check
-        run: clang++ -std=c++17 -g -fsanitize=address,undefined -o file_scan_test file_scan.cpp file_type.cpp zip_scan.cpp pdf_scan.cpp image_scan.cpp ole2_scan.cpp archive_scan.cpp exif_parser.cpp file_cheap_filter.cpp test/file_scan_test.cpp -lz
+        run: clang++ -std=c++17 -g -fsanitize=address,undefined -o file_scan_test file_scan.cpp file_type.cpp zip_scan.cpp pdf_scan.cpp image_scan.cpp ole2_scan.cpp archive_scan.cpp text_scan.cpp exif_parser.cpp file_cheap_filter.cpp test/file_scan_test.cpp -lz
       - name: Run file scan pipeline self-check
         run: ./file_scan_test
 
@@ -77,10 +81,10 @@ jobs:
       - name: Run bounded OLE2 scanner fuzz pass
         run: mkdir -p corpus_ole2 && cp fuzz/seeds_ole2/* corpus_ole2/ && ./ole2_fuzzer corpus_ole2 -max_total_time=60 -max_len=65536 -print_final_stats=1
       - name: Build archive scanner fuzzer
-        run: clang++ -std=c++17 -g -O1 -fsanitize=fuzzer,address,undefined -fno-sanitize-recover=all -o archive_fuzzer archive_scan.cpp file_type.cpp fuzz/archive_scan_fuzzer.cpp -lz
+        run: clang++ -std=c++17 -g -O1 -fsanitize=fuzzer,address,undefined -fno-sanitize-recover=all -o archive_fuzzer archive_scan.cpp file_type.cpp text_scan.cpp fuzz/archive_scan_fuzzer.cpp -lz
       - name: Run bounded archive scanner fuzz pass
         run: mkdir -p corpus_archive && cp fuzz/seeds_archive/* corpus_archive/ && ./archive_fuzzer corpus_archive -max_total_time=60 -max_len=65536 -print_final_stats=1
       - name: Build file scan pipeline fuzzer
-        run: clang++ -std=c++17 -g -O1 -fsanitize=fuzzer,address,undefined -fno-sanitize-recover=all -o file_scan_fuzzer file_scan.cpp file_type.cpp zip_scan.cpp pdf_scan.cpp image_scan.cpp ole2_scan.cpp archive_scan.cpp exif_parser.cpp file_cheap_filter.cpp fuzz/file_scan_fuzzer.cpp -lz
+        run: clang++ -std=c++17 -g -O1 -fsanitize=fuzzer,address,undefined -fno-sanitize-recover=all -o file_scan_fuzzer file_scan.cpp file_type.cpp zip_scan.cpp pdf_scan.cpp image_scan.cpp ole2_scan.cpp archive_scan.cpp text_scan.cpp exif_parser.cpp file_cheap_filter.cpp fuzz/file_scan_fuzzer.cpp -lz
       - name: Run bounded file scan pipeline fuzz pass
         run: mkdir -p corpus_fs && cp fuzz/seeds/* fuzz/seeds_pdf/* fuzz/seeds_zip/* corpus_fs/ && ./file_scan_fuzzer corpus_fs -max_total_time=60 -max_len=65536 -print_final_stats=1

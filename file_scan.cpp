@@ -1,5 +1,7 @@
 #include "file_scan.h"
 
+#include <cctype>
+
 #include "archive_scan.h"
 #include "exif_parser.h"
 #include "file_cheap_filter.h"
@@ -8,6 +10,7 @@
 #include "json_util.h"
 #include "ole2_scan.h"
 #include "pdf_scan.h"
+#include "text_scan.h"
 #include "zip_scan.h"
 
 namespace noxos {
@@ -51,8 +54,18 @@ FileScanOutput ScanFile(const std::vector<uint8_t>& b, const std::string* name,
     std::string type = DetectFileType(b);
     bool is_jpeg = b.size() >= 2 && b[0] == 0xFF && b[1] == 0xD8;
 
+    if (type == "unknown" && name) {
+        size_t dot = name->find_last_of('.');
+        size_t slash = name->find_last_of("/\\");
+        if (dot != std::string::npos && (slash == std::string::npos || dot > slash)) {
+            std::string ext = name->substr(dot + 1);
+            for (char& c : ext) c = (char)tolower((unsigned char)c);
+            if (IsScriptExtension(ext)) type = "script";
+        }
+    }
     bool own_scanner = is_jpeg || type == "png" || type == "gif" || type == "webp" || type == "pdf" ||
-                       type == "ole2" || type == "gzip" || type == "tar" || type == "7z" || type == "rar";
+                       type == "ole2" || type == "gzip" || type == "tar" || type == "7z" || type == "rar" ||
+                       type == "svg" || type == "html" || type == "script";
     if (!is_jpeg && (type == "zip" || (!own_scanner && EndsWithZip(b)))) {
         cheap = ScanZip(b, out.json, &type);
     } else if (is_jpeg) {
@@ -68,6 +81,8 @@ FileScanOutput ScanFile(const std::vector<uint8_t>& b, const std::string* name,
         }
     } else if (type == "gzip" || type == "tar" || type == "7z" || type == "rar") {
         cheap = ScanArchive(b, type, out.json);
+    } else if (type == "svg" || type == "html" || type == "script") {
+        cheap = ScanText(b, type, out.json);
     } else if (type == "ole2") {
         cheap = ScanOle2(b, out.json);
     } else if (type == "pdf") {
