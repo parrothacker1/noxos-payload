@@ -19,6 +19,8 @@ constexpr size_t kMinEncodedArg = 24;
 constexpr size_t kMaxPositions = 256;
 constexpr size_t kMaxRuns = 64;
 constexpr size_t kPowershellFlagWindow = 160;
+constexpr size_t kCradleDistance = 1024;
+constexpr size_t kShellDecodeDistance = 200;
 
 struct Flags {
     std::string first;
@@ -175,6 +177,70 @@ bool PowershellEncoded(const std::string& s) {
     return false;
 }
 
+std::vector<size_t> WordPositions(const std::string& s, const char* word) {
+    std::vector<size_t> v;
+    size_t len = strlen(word), pos = 0;
+    while (v.size() < kMaxPositions && (pos = s.find(word, pos)) != std::string::npos) {
+        bool left = pos == 0 || !IsWordChar(s[pos - 1]);
+        bool right = pos + len >= s.size() || !IsWordChar(s[pos + len]);
+        if (left && right) v.push_back(pos);
+        pos += len;
+    }
+    return v;
+}
+
+std::vector<size_t> NonKeyPositions(const std::string& s, const char* needle) {
+    std::vector<size_t> v;
+    size_t len = strlen(needle);
+    for (size_t pos : Positions(s, needle)) {
+        size_t idx = pos + len;
+        if (idx < s.size() && (s[idx] == '"' || s[idx] == '\'')) idx++;
+        if (idx < s.size() && s[idx] == ':') continue;
+        v.push_back(pos);
+    }
+    return v;
+}
+
+std::vector<size_t> CallPositions(const std::string& s, const char* word, bool allow_pipe_prefix) {
+    std::vector<size_t> v;
+    size_t len = strlen(word);
+    for (size_t pos : WordPositions(s, word)) {
+        size_t idx = pos + len;
+        while (idx < s.size() && (s[idx] == ' ' || s[idx] == '\t')) idx++;
+        char next = idx < s.size() ? s[idx] : '\0';
+        bool call = next == '(' || next == '$' || next == '"' || next == '\'' || next == '-' ||
+                    s.compare(idx, 4, "http") == 0;
+        bool piped = allow_pipe_prefix && pos >= 2 && s.compare(pos - 2, 2, "| ") == 0;
+        if (call || piped) v.push_back(pos);
+    }
+    return v;
+}
+
+std::vector<size_t> PipeShellPositions(const std::string& s) {
+    std::vector<size_t> v;
+    for (const char* p : {"| sh", "|sh", "| bash", "|bash"}) {
+        size_t len = strlen(p), pos = 0;
+        while (v.size() < kMaxPositions && (pos = s.find(p, pos)) != std::string::npos) {
+            if (pos + len >= s.size() || !IsWordChar(s[pos + len])) v.push_back(pos);
+            pos += len;
+        }
+    }
+    return v;
+}
+
+void Append(std::vector<size_t>& dst, const std::vector<size_t>& src) {
+    dst.insert(dst.end(), src.begin(), src.end());
+}
+
+bool NearEach(const std::vector<size_t>& a, const std::vector<size_t>& b, size_t dist) {
+    for (size_t x : a) {
+        for (size_t y : b) {
+            if (Gap(x, y) <= dist) return true;
+        }
+    }
+    return false;
+}
+
 std::string ScriptBlocks(const std::string& s) {
     std::string out;
     size_t pos = 0;
@@ -233,7 +299,7 @@ CheapFilterResult ScanText(const std::vector<uint8_t>& b, const std::string& typ
     size_t js_urls = Count(s, "javascript:");
     size_t b64_run = MaxBase64Run(s);
     size_t pipe_to_shell = 0;
-    for (const char* p : {"| sh", "|sh", "| bash", "|bash"}) pipe_to_shell += Count(s, p);
+    pipe_to_shell = PipeShellPositions(s).size();
 
     const std::string active = type == "script" ? s : ScriptBlocks(s);
     bool blob_api = Has(s, "new blob(") || Has(s, "createobjecturl") || Has(s, "mssaveoropenblob");
@@ -271,15 +337,16 @@ CheapFilterResult ScanText(const std::vector<uint8_t>& b, const std::string& typ
               Has(active, "frombase64string") || Has(active, "downloadstring") || Has(active, "downloadfile") ||
               Has(active, "iwr ") || Has(active, "irm ");
     bool ps_encoded = PowershellEncoded(active);
-    bool ps_iex = Has(active, "invoke-expression") || Has(active, "iex ") || Has(active, "iex(") ||
-                  Has(active, "| iex");
-    bool ps_download = Has(active, "downloadstring") || Has(active, "downloadfile") ||
-                       Has(active, "invoke-webrequest") || Has(active, "invoke-restmethod") ||
-                       Has(active, "iwr ") || Has(active, "irm ");
+    std::vector<size_t> iex_pos = CallPositions(active, "iex", true);
+    Append(iex_pos, NonKeyPositions(active, "invoke-expression"));
+    std::vector<size_t> download_pos = Positions(active, "downloadstring");
+    for (const char* w : {"downloadfile", "invoke-webrequest", "invoke-restmethod"}) Append(download_pos, NonKeyPositions(active, w));
+    for (const char* w : {"iwr", "irm"}) Append(download_pos, CallPositions(active, w, false));
+    std::vector<size_t> b64_pos = Positions(active, "frombase64string");
     bool ps_hidden = Has(active, "-windowstyle hidden") || Has(active, "-w hidden") || Has(active, "-windowstyle 1");
-    bool ps_cradle = ps && ((Has(active, "frombase64string") && ps_iex) || (ps_download && ps_iex) ||
+    bool ps_cradle = ps && (NearEach(b64_pos, iex_pos, kCradleDistance) || NearEach(download_pos, iex_pos, kCradleDistance) ||
                             (ps_hidden && (Has(active, "downloadstring") || Has(active, "downloadfile") ||
-                                           ps_encoded || Has(active, "frombase64string"))));
+                                           ps_encoded || !b64_pos.empty())));
 
     bool wsh = (Has(active, "wscript.shell") || Has(active, "shell.application")) &&
                (Has(active, ".run(") || Has(active, ".exec(") || Has(active, ".run ") || Has(active, "shellexecute"));
@@ -288,8 +355,11 @@ CheapFilterResult ScanText(const std::vector<uint8_t>& b, const std::string& typ
                   (HasWord(active, "mshta") && Has(active, "http")) ||
                   (HasWord(active, "bitsadmin") && Has(active, "/transfer"));
     bool is_script = type == "script";
-    bool shell_decode = is_script && (Has(s, "base64 -d") || Has(s, "base64 --decode")) &&
-                        (pipe_to_shell > 0 || Has(s, "eval "));
+    std::vector<size_t> decode_pos = Positions(s, "base64 -d");
+    Append(decode_pos, Positions(s, "base64 --decode"));
+    std::vector<size_t> sink_pos = PipeShellPositions(s);
+    Append(sink_pos, WordPositions(s, "eval"));
+    bool shell_decode = is_script && NearEach(decode_pos, sink_pos, kShellDecodeDistance);
     bool reverse_shell = is_script && Has(s, "/dev/tcp/") && (Has(s, "bash -i") || Has(s, ">&") || Has(s, "sh -i"));
 
     if (type == "svg") {

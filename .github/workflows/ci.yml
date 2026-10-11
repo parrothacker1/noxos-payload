@@ -84,6 +84,10 @@ jobs:
         run: clang++ -std=c++17 -g -O1 -fsanitize=fuzzer,address,undefined -fno-sanitize-recover=all -o archive_fuzzer archive_scan.cpp file_type.cpp text_scan.cpp fuzz/archive_scan_fuzzer.cpp -lz
       - name: Run bounded archive scanner fuzz pass
         run: mkdir -p corpus_archive && cp fuzz/seeds_archive/* corpus_archive/ && ./archive_fuzzer corpus_archive -max_total_time=60 -max_len=65536 -print_final_stats=1
+      - name: Build text scanner fuzzer
+        run: clang++ -std=c++17 -g -O1 -fsanitize=fuzzer,address,undefined -fno-sanitize-recover=all -o text_fuzzer text_scan.cpp fuzz/text_scan_fuzzer.cpp
+      - name: Run bounded text scanner fuzz pass
+        run: mkdir -p corpus_text && cp fuzz/seeds_text/* corpus_text/ && ./text_fuzzer corpus_text -max_total_time=60 -max_len=65536 -print_final_stats=1
       - name: Build file scan pipeline fuzzer
         run: clang++ -std=c++17 -g -O1 -fsanitize=fuzzer,address,undefined -fno-sanitize-recover=all -o file_scan_fuzzer file_scan.cpp file_type.cpp zip_scan.cpp pdf_scan.cpp image_scan.cpp ole2_scan.cpp archive_scan.cpp text_scan.cpp exif_parser.cpp file_cheap_filter.cpp fuzz/file_scan_fuzzer.cpp -lz
       - name: Run bounded file scan pipeline fuzz pass
