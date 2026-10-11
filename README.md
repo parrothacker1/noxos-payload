@@ -76,6 +76,13 @@ handle_connection(client_fd)
       │      │        trailing data, startxref bounds
       │      ├─ PNG/GIF/WebP: ScanImage → chunk/block walk, CRC (PNG), IEND/trailer, RIFF size,
       │        data after the image, embedded foreign magic, pixel-count bomb
+      ├─ OLE2 (legacy Office): ScanOle2 → VBA project, Excel 4.0 (XLM) macro sheets,
+      │        encrypted documents, compound-file structure
+      ├─ gzip / tar / 7z / RAR: ScanArchive → CRC/trailer/truncation, bomb ratio, path and
+      │        symlink escapes, encrypted RAR/7z, appended data
+      ├─ HTML / SVG / script (by content, shebang, or task-2 extension): ScanText →
+      │        smuggling, encoded/cradle PowerShell, WScript/LOLBin, shell decode-and-pipe
+      ├─ APK extras: every classes*.dex, manifest targetSdk/minSdk/sharedUserId/debuggable
       ├─ everything else: signature list, packed ELF/PE
       │      │        → clean = {"file_type":"<detected>"|"unknown"} (fail-open)
       │      ├─ task 2 only: CheckDeclaredType(name, mime, detected type)
@@ -220,6 +227,9 @@ clang++ -std=c++17 -g -fsanitize=address,undefined -o file_cf_test file_cheap_fi
 clang++ -std=c++17 -g -fsanitize=address,undefined -o zip_scan_test zip_scan.cpp test/zip_scan_test.cpp -lz && ./zip_scan_test
 clang++ -std=c++17 -g -fsanitize=address,undefined -o image_scan_test image_scan.cpp test/image_scan_test.cpp -lz && ./image_scan_test
 clang++ -std=c++17 -O2 -o self_signature_test test/self_signature_test.cpp && ./self_signature_test
+clang++ -std=c++17 -g -fsanitize=address,undefined -o ole2_scan_test ole2_scan.cpp test/ole2_scan_test.cpp && ./ole2_scan_test
+clang++ -std=c++17 -g -fsanitize=address,undefined -o archive_scan_test archive_scan.cpp file_type.cpp text_scan.cpp test/archive_scan_test.cpp -lz && ./archive_scan_test
+clang++ -std=c++17 -g -fsanitize=address,undefined -o text_scan_test text_scan.cpp test/text_scan_test.cpp && ./text_scan_test
 clang++ -std=c++17 -g -fsanitize=address,undefined -o pdf_scan_test pdf_scan.cpp test/pdf_scan_test.cpp -lz && ./pdf_scan_test
 clang++ -std=c++17 -g -fsanitize=address,undefined -o file_scan_test file_scan.cpp file_type.cpp zip_scan.cpp pdf_scan.cpp image_scan.cpp ole2_scan.cpp archive_scan.cpp text_scan.cpp exif_parser.cpp file_cheap_filter.cpp test/file_scan_test.cpp -lz && ./file_scan_test
 ```
