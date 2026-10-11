@@ -66,6 +66,37 @@ Bytes Webp(uint32_t riff_extra = 0) {
     return v;
 }
 
+Bytes PngWith(const std::vector<std::pair<std::string, Bytes>>& chunks) {
+    Bytes v = {0x89, 'P', 'N', 'G', '\r', '\n', 0x1A, '\n'};
+    for (const auto& c : chunks) PngChunk(v, c.first, c.second);
+    return v;
+}
+
+Bytes Ihdr() {
+    Bytes ihdr;
+    PutBe32(ihdr, 8);
+    PutBe32(ihdr, 8);
+    for (uint8_t b : {8, 2, 0, 0, 0}) ihdr.push_back(b);
+    return ihdr;
+}
+
+Bytes GifWithExtension(uint8_t label, size_t n) {
+    Bytes g = Gif();
+    g.pop_back();
+    g.push_back(0x21);
+    g.push_back(label);
+    size_t left = n;
+    while (left > 0) {
+        size_t take = left > 255 ? 255 : left;
+        g.push_back((uint8_t)take);
+        g.insert(g.end(), take, 'c');
+        left -= take;
+    }
+    g.push_back(0);
+    g.push_back(0x3B);
+    return g;
+}
+
 noxos::CheapFilterResult Scan(const Bytes& b, const std::string& type, std::string* json = nullptr) {
     std::string j;
     auto r = noxos::ScanImage(b, type, j);
@@ -89,7 +120,8 @@ int main() {
         auto r = Scan(Png(64, 32), "png", &j);
         assert(!r.flagged);
         assert(j == "{\"file_type\":\"png\",\"image_width\":64,\"image_height\":32,\"image_chunks\":3,"
-                    "\"image_trailing_bytes\":0,\"image_crc_errors\":0,\"image_structure_ok\":true}");
+                    "\"image_trailing_bytes\":0,\"image_crc_errors\":0,\"image_structure_ok\":true,"
+                    "\"image_idat_chunks\":1,\"image_text_bytes\":0,\"image_unknown_bytes\":0}");
     }
     assert(Has(Scan(Png(64, 32, true, true), "png"), "1 PNG chunk CRC mismatches"));
     assert(Has(Scan(Png(64, 32, false), "png"), "no IEND"));
@@ -152,6 +184,40 @@ int main() {
         w = Webp();
         w[16] = 0xFF;
         assert(Has(Scan(w, "webp"), "runs past the RIFF size"));
+    }
+
+    {
+        Bytes idat(20, 0x55);
+        std::string j;
+        auto r = Scan(PngWith({{"IHDR", Ihdr()}, {"tEXt", Bytes(200, 'k')}, {"prVW", Bytes(100, 1)},
+                               {"IDAT", idat}, {"IEND", {}}}), "png", &j);
+        if (r.flagged) fprintf(stderr, "%s\n", r.reason.c_str());
+        assert(!r.flagged);
+        assert(j.find("\"image_text_bytes\":200") != std::string::npos);
+        assert(j.find("\"image_unknown_bytes\":100") != std::string::npos);
+        assert(Has(Scan(PngWith({{"IHDR", Ihdr()}, {"IDAT", idat}, {"PLTE", Bytes(6, 0)}, {"IEND", {}}}), "png"),
+                     "PLTE chunk appears after the image data"));
+        assert(Has(Scan(PngWith({{"IHDR", Ihdr()}, {"IDAT", idat}, {"tIME", Bytes(7, 0)}, {"IDAT", idat}, {"IEND", {}}}),
+                        "png"), "IDAT chunks are not contiguous"));
+        assert(!Scan(PngWith({{"IHDR", Ihdr()}, {"IDAT", idat}, {"IDAT", idat}, {"IEND", {}}}), "png").flagged);
+        assert(Has(Scan(PngWith({{"IHDR", Ihdr()}, {"XTRA", Bytes(4, 0)}, {"IDAT", idat}, {"IEND", {}}}), "png"),
+                   "unknown critical chunk XTRA"));
+        assert(Has(Scan(PngWith({{"IHDR", Ihdr()}, {"IDAT", idat}, {"zzZz", Bytes(70000, 1)}, {"IEND", {}}}), "png"),
+                   "70000-byte unknown ancillary chunk zzZz"));
+        assert(Has(Scan(PngWith({{"IHDR", Ihdr()}, {"tEXt", Bytes(1048577, 'a')}, {"IDAT", idat}, {"IEND", {}}}), "png"),
+                   "tEXt chunk is 1048577 bytes"));
+        assert(!Scan(PngWith({{"IHDR", Ihdr()}, {"iCCP", Bytes(200000, 1)}, {"IDAT", idat}, {"IEND", {}}}), "png").flagged);
+        assert(Has(Scan(PngWith({{"IHDR", Ihdr()}, {"IHDR", Ihdr()}, {"IDAT", idat}, {"IEND", {}}}), "png"),
+                   "more than one IHDR"));
+        assert(Has(Scan(PngWith({{"IHDR", Ihdr()}, {"IEND", {}}}), "png"), "no IDAT chunk"));
+
+        assert(!Scan(GifWithExtension(0xFE, 500), "gif").flagged);
+        assert(Has(Scan(GifWithExtension(0xFE, 70000), "gif"), "GIF comment extension is 70000 bytes"));
+        assert(!Scan(GifWithExtension(0xFF, 20000), "gif").flagged);
+        assert(Has(Scan(GifWithExtension(0xFF, 300000), "gif"), "GIF application extension is 300000 bytes"));
+        std::string gj;
+        Scan(GifWithExtension(0xFE, 500), "gif", &gj);
+        assert(gj.find("\"image_text_bytes\":500") != std::string::npos);
     }
 
     printf("ok: image_scan_test passed\n");

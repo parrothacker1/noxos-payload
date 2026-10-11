@@ -12,6 +12,10 @@ namespace {
 
 constexpr size_t kMaxBenignTrailerBytes = 4096;
 constexpr uint64_t kMaxPixels = 1ull << 28;
+constexpr size_t kMaxUnknownAncillary = 64 * 1024;
+constexpr size_t kMaxTextChunk = 1024 * 1024;
+constexpr size_t kMaxGifComment = 64 * 1024;
+constexpr size_t kMaxGifAppExtension = 256 * 1024;
 
 struct Info {
     uint32_t width = 0;
@@ -22,7 +26,23 @@ struct Info {
     bool ended = false;
     bool structure_ok = true;
     std::string first_problem;
+    size_t idat_chunks = 0;
+    bool seen_idat = false;
+    bool idat_ended = false;
+    size_t text_bytes = 0;
+    size_t unknown_bytes = 0;
 };
+
+bool IsKnownChunk(const std::string& n) {
+    static const char* const kKnown[] = {
+        "IHDR", "PLTE", "IDAT", "IEND", "cHRM", "gAMA", "iCCP", "sBIT", "sRGB", "cICP", "mDCV", "cLLI",
+        "bKGD", "hIST", "tRNS", "eXIf", "pHYs", "sPLT", "tIME", "iTXt", "tEXt", "zTXt", "acTL", "fcTL",
+        "fdAT", "oFFs", "pCAL", "sCAL", "gIFg", "gIFx", "gIFt", "sTER"};
+    for (const char* k : kKnown) {
+        if (n == k) return true;
+    }
+    return false;
+}
 
 uint32_t ReadU32Be(const uint8_t* p) {
     return ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) | ((uint32_t)p[2] << 8) | p[3];
@@ -61,9 +81,32 @@ void WalkPng(const std::vector<uint8_t>& b, Info& info) {
         }
         uLong crc = crc32(0L, type, 4 + len);
         if ((uint32_t)crc != ReadU32Be(b.data() + pos + 8 + len)) info.crc_errors++;
+        std::string tn(reinterpret_cast<const char*>(type), 4);
+        if (tn == "IHDR" && info.chunks > 0) Problem(info, "PNG has more than one IHDR chunk");
+        if (tn == "IDAT") {
+            if (info.idat_ended) Problem(info, "PNG IDAT chunks are not contiguous");
+            info.idat_chunks++;
+            info.seen_idat = true;
+        } else if (info.seen_idat && tn != "IEND") {
+            info.idat_ended = true;
+        }
+        if (tn == "PLTE" && info.seen_idat) Problem(info, "PNG PLTE chunk appears after the image data");
+        bool critical = type[0] >= 'A' && type[0] <= 'Z';
+        if (critical && !IsKnownChunk(tn)) Problem(info, "PNG has an unknown critical chunk " + tn);
+        if (!critical && !IsKnownChunk(tn)) {
+            info.unknown_bytes += len;
+            if (len > kMaxUnknownAncillary) {
+                Problem(info, "PNG has a " + std::to_string(len) + "-byte unknown ancillary chunk " + tn);
+            }
+        }
+        if (tn == "tEXt" || tn == "zTXt" || tn == "iTXt") {
+            info.text_bytes += len;
+            if (len > kMaxTextChunk) Problem(info, "PNG " + tn + " chunk is " + std::to_string(len) + " bytes");
+        }
         info.chunks++;
         pos += 12 + (size_t)len;
         if (memcmp(type, "IEND", 4) == 0) {
+            if (info.idat_chunks == 0) Problem(info, "PNG has no IDAT chunk");
             info.ended = true;
             info.trailing = b.size() - pos;
             return;
@@ -72,7 +115,7 @@ void WalkPng(const std::vector<uint8_t>& b, Info& info) {
     Problem(info, "PNG has no IEND chunk");
 }
 
-void SkipSubBlocks(const std::vector<uint8_t>& b, size_t& pos, bool& ok) {
+void SkipSubBlocks(const std::vector<uint8_t>& b, size_t& pos, bool& ok, size_t* bytes = nullptr) {
     while (true) {
         if (pos >= b.size()) {
             ok = false;
@@ -85,6 +128,7 @@ void SkipSubBlocks(const std::vector<uint8_t>& b, size_t& pos, bool& ok) {
             return;
         }
         pos += n;
+        if (bytes) *bytes += n;
     }
 }
 
@@ -108,8 +152,20 @@ void WalkGif(const std::vector<uint8_t>& b, Info& info) {
         if (block == 0x21) {
             if (pos >= b.size()) ok = false;
             else {
-                pos++;
-                SkipSubBlocks(b, pos, ok);
+                uint8_t label = b[pos++];
+                size_t bytes = 0;
+                SkipSubBlocks(b, pos, ok, &bytes);
+                if (label == 0xFE) {
+                    info.text_bytes += bytes;
+                    if (bytes > kMaxGifComment) {
+                        Problem(info, "GIF comment extension is " + std::to_string(bytes) + " bytes");
+                    }
+                } else if (label == 0xFF) {
+                    info.unknown_bytes += bytes;
+                    if (bytes > kMaxGifAppExtension) {
+                        Problem(info, "GIF application extension is " + std::to_string(bytes) + " bytes");
+                    }
+                }
             }
         } else if (block == 0x2C) {
             if (b.size() - pos < 10) {
@@ -218,7 +274,10 @@ CheapFilterResult ScanImage(const std::vector<uint8_t>& b, const std::string& ty
                ",\"image_chunks\":" + std::to_string(info.chunks) +
                ",\"image_trailing_bytes\":" + std::to_string(info.trailing) +
                ",\"image_crc_errors\":" + std::to_string(info.crc_errors) +
-               ",\"image_structure_ok\":" + (info.structure_ok ? "true" : "false") + "}";
+               ",\"image_structure_ok\":" + (info.structure_ok ? "true" : "false") +
+               ",\"image_idat_chunks\":" + std::to_string(info.idat_chunks) +
+               ",\"image_text_bytes\":" + std::to_string(info.text_bytes) +
+               ",\"image_unknown_bytes\":" + std::to_string(info.unknown_bytes) + "}";
     return r;
 }
 
